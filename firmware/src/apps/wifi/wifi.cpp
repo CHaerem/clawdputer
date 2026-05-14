@@ -357,12 +357,13 @@ App wifi_app = {
     .description  = "Scan & connect",
     .services     = SVC_WIFI,
     .onEnter      = onEnter,
-    .onExit       = onExit,
+    .onExit      = onExit,
     .onTick       = onTick,
     .onKey        = onKey,
     .onDraw       = onDraw,
     .onEvent      = nullptr,
     .keysAsArrows = false,  // password field accepts ;./,/ as text
+    .hidden       = true,   // launched from Settings, not the home grid
 };
 
 }  // namespace

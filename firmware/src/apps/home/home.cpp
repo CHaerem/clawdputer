@@ -37,6 +37,7 @@ void rebuildList() {
     for (size_t i = 0; i < registry::count(); i++) {
         const App* a = registry::at(i);
         if (strcmp(a->id, "home") == 0) continue;
+        if (a->hidden) continue;
         g_tiles.push_back(a);
     }
     if (g_selected >= (int)g_tiles.size()) g_selected = 0;

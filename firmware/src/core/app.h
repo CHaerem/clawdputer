@@ -32,6 +32,11 @@ struct App {
     // Down/Left/Right even without Fn held. Set to false for text-input apps
     // (chat) where ;./,/ must reach onKey as literal characters.
     bool           keysAsArrows = true;
+
+    // Hidden apps don't appear in the home launcher. They're still in the
+    // registry and reachable via clawd_request_app() — useful for settings
+    // sub-flows launched from another app's action.
+    bool           hidden       = false;
 };
 
 void registerApp(const App* app);

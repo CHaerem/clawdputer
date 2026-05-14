@@ -10,12 +10,15 @@
 
 #include "core/app.h"
 #include "core/key.h"
+#include "core/registry.h"
 #include "services/ble.h"
 #include "services/identity.h"
 #include "services/updater.h"
 #include "services/wifi.h"
 #include "ui/canvas.h"
 #include "ui/statusbar.h"
+
+extern void clawd_request_app(const App* app);
 
 #if __has_include("wifi_secrets.h")
 #include "wifi_secrets.h"
@@ -62,6 +65,12 @@ void actClearWifi() {
     toast("WiFi cleared (reboot to apply)");
 }
 
+void actConfigureWifi() {
+    const App* w = registry::find("wifi");
+    if (w) clawd_request_app(w);
+    else toast("wifi app not registered");
+}
+
 bool g_showPubkey = false;
 bool g_showSealKey = false;
 int  g_pubkeyScroll = 0;
@@ -103,6 +112,7 @@ void rebuild() {
     g_items.push_back({"ssh pubkey fp", identity::fingerprint().empty() ? std::string("—") : identity::fingerprint(), nullptr});
     g_items.push_back({"show SSH pubkey",  "",                                                  actShowPubkey});
     g_items.push_back({"show seal key",    "",                                                  actShowSealKey});
+    g_items.push_back({"configure WiFi",    "",                                                  actConfigureWifi});
     g_items.push_back({"check for updates", "",                                                  actCheckUpdate});
     g_items.push_back({"clear WiFi creds",  "",                                                  actClearWifi});
     g_items.push_back({"clear BLE bonds",   "",                                                  actClearBonds});
