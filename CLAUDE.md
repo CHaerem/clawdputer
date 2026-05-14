@@ -66,11 +66,22 @@ MCP / repo access.
 
 **A new firmware app:**
 1. Create `firmware/src/apps/<name>/<name>.cpp`.
-2. Define `static App my_app = { .id=..., .onEnter=..., ... };`
+2. Define `static App my_app = { .id=..., .name=..., .description=..., .onEnter=..., ... };`
 3. End with `REGISTER_APP(my_app);` — registry collects it on boot.
 4. Subscribe to events in `onEnter` (`events::subscribe(...)`),
    unsubscribe in `onExit`. Filter by `e.source` to your link.
-5. Tab on the keyboard cycles between registered apps.
+5. `apps/home` is the launcher and picks up new apps automatically.
+6. To switch app programmatically, call `clawd_request_app(other_app)`
+   (declared `extern` in any app .cpp); the switch is applied on the
+   next loop iteration.
+
+**Key input contract:**
+- Printable ASCII (`0x20`–`0x7E`) arrives via `onKey(char)`.
+- `'\n'` for Enter, `'\b'` for Backspace.
+- Fn-modified arrow keys are translated to `key::Up/Down/Left/Right`
+  (see `core/key.h`).
+- Tab is reserved — it always returns to the home launcher and never
+  reaches an app's `onKey`.
 
 **A new shared service:**
 1. Create `firmware/src/services/<name>.{h,cpp}`.

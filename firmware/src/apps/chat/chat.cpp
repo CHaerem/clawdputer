@@ -244,15 +244,16 @@ void onDraw() {
 }
 
 App chat_app = {
-    .id       = "chat",
-    .name     = "Chat",
-    .services = SVC_BLE,
-    .onEnter  = onEnter,
-    .onExit   = onExit,
-    .onTick   = onTick,
-    .onKey    = onKey,
-    .onDraw   = onDraw,
-    .onEvent  = nullptr,
+    .id          = "chat",
+    .name        = "Chat",
+    .description = "Remote for claude CLI on Mac",
+    .services    = SVC_BLE,
+    .onEnter     = onEnter,
+    .onExit      = onExit,
+    .onTick      = onTick,
+    .onKey       = onKey,
+    .onDraw      = onDraw,
+    .onEvent     = nullptr,
 };
 
 }  // namespace

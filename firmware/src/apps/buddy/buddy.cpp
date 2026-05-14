@@ -250,15 +250,16 @@ void onDraw() {
 }
 
 App buddy_app = {
-    .id       = "buddy",
-    .name     = "Buddy",
-    .services = SVC_BLE,
-    .onEnter  = onEnter,
-    .onExit   = onExit,
-    .onTick   = onTick,
-    .onKey    = onKey,
-    .onDraw   = onDraw,
-    .onEvent  = nullptr,  // app routes BLE events through events::subscribe in onEnter
+    .id          = "buddy",
+    .name        = "Buddy",
+    .description = "Claude Desktop companion",
+    .services    = SVC_BLE,
+    .onEnter     = onEnter,
+    .onExit      = onExit,
+    .onTick      = onTick,
+    .onKey       = onKey,
+    .onDraw      = onDraw,
+    .onEvent     = nullptr,  // app routes BLE events through events::subscribe in onEnter
 };
 
 }  // namespace

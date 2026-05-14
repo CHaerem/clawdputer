@@ -18,6 +18,7 @@ enum AppService : uint32_t {
 struct App {
     const char*    id;
     const char*    name;
+    const char*    description;  // one-line hint shown in the launcher; may be nullptr
     uint32_t       services;
     AppLifecycleFn onEnter;
     AppLifecycleFn onExit;

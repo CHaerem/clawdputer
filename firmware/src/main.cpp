@@ -8,6 +8,7 @@
 #include <M5Cardputer.h>
 
 #include "core/app.h"
+#include "core/key.h"
 #include "core/registry.h"
 #include "services/ble.h"
 #include "services/ota.h"
@@ -15,25 +16,32 @@
 
 namespace {
 
-const App* g_active = nullptr;
+const App* g_active  = nullptr;
+const App* g_pending = nullptr;
 
 void enter(const App* app) {
+    if (!app) return;
     if (g_active && g_active->onExit) g_active->onExit();
     g_active = app;
     if (g_active && g_active->onEnter) g_active->onEnter();
+    Serial.printf("[clawdputer] entered app: %s\n", g_active->id);
 }
 
-void cycleApp() {
-    size_t n = registry::count();
-    if (n == 0) return;
-    size_t idx = 0;
-    for (; idx < n; idx++) {
-        if (registry::at(idx) == g_active) break;
+const App* findApp(const char* id) {
+    for (size_t i = 0; i < registry::count(); i++) {
+        const App* a = registry::at(i);
+        if (strcmp(a->id, id) == 0) return a;
     }
-    idx = (idx + 1) % n;
-    enter(registry::at(idx));
-    Serial.printf("[clawdputer] switched to app: %s\n",
-                  g_active ? g_active->id : "(null)");
+    return nullptr;
+}
+
+void goHome() {
+    const App* home = findApp("home");
+    if (home) {
+        enter(home);
+    } else if (registry::count() > 0) {
+        enter(registry::at(0));
+    }
 }
 
 void dispatchKeys() {
@@ -41,19 +49,37 @@ void dispatchKeys() {
     if (!M5Cardputer.Keyboard.isPressed()) return;
     auto state = M5Cardputer.Keyboard.keysState();
 
-    // Tab is the global "switch app" trigger. Apps don't see it.
+    // Tab always takes you home — like the home button on a phone.
     if (state.tab) {
-        cycleApp();
+        goHome();
         return;
     }
 
     if (!g_active || !g_active->onKey) return;
-    for (char ch : state.word) g_active->onKey(ch);
+
+    for (char ch : state.word) {
+        if (state.fn) {
+            // Cardputer's Fn modifier turns ;./,/ into arrow keys.
+            switch (ch) {
+                case ';': g_active->onKey(key::Up);    continue;
+                case '.': g_active->onKey(key::Down);  continue;
+                case ',': g_active->onKey(key::Left);  continue;
+                case '/': g_active->onKey(key::Right); continue;
+                default: break;
+            }
+        }
+        g_active->onKey(ch);
+    }
     if (state.enter) g_active->onKey('\n');
     if (state.del)   g_active->onKey('\b');
 }
 
 }  // namespace
+
+// Apps call this to ask for a switch. We defer the actual enter() until the
+// next loop iteration so the calling app's current callback can return
+// cleanly first.
+void clawd_request_app(const App* app) { g_pending = app; }
 
 void setup() {
     auto cfg = M5.config();
@@ -69,13 +95,8 @@ void setup() {
     ble::begin();
     wifi::begin();
 
-    // First registered app wins for now. A launcher screen comes later when
-    // more than one app is in the build.
-    if (registry::count() > 0) {
-        enter(registry::at(0));
-    } else {
-        Serial.println("[clawdputer] no apps registered — idle");
-    }
+    goHome();
+    if (!g_active) Serial.println("[clawdputer] no apps registered — idle");
 }
 
 void loop() {
@@ -85,6 +106,11 @@ void loop() {
         // OTA owns the screen and the CPU; skip app ticks until reboot.
         delay(5);
         return;
+    }
+    if (g_pending && g_pending != g_active) {
+        const App* next = g_pending;
+        g_pending = nullptr;
+        enter(next);
     }
     dispatchKeys();
     if (g_active && g_active->onTick) g_active->onTick();
