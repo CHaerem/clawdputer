@@ -172,6 +172,13 @@ bool startConnection(const SshHost& h) {
         g_status = std::string("open: ") + ssh_get_error(g_session);
         return false;
     }
+    // Allocate a pseudo-terminal so commands like sudo (which refuse to
+    // prompt without a tty) work. Size matches what the chat-style line
+    // viewport can render comfortably; xterm is the safest TERM string.
+    if (ssh_channel_request_pty_size(g_channel, "xterm", 38, 12) != SSH_OK) {
+        g_status = std::string("pty: ") + ssh_get_error(g_session);
+        return false;
+    }
     if (ssh_channel_request_shell(g_channel) != SSH_OK) {
         g_status = std::string("shell: ") + ssh_get_error(g_session);
         return false;
@@ -180,29 +187,63 @@ bool startConnection(const SshHost& h) {
     return true;
 }
 
+// Strip ANSI escape sequences (CSI/OSC) inline and accumulate clean bytes.
+void appendStripped(std::string& dst, const char* src, size_t n) {
+    static int      esc      = 0;   // ANSI parser state: 0=normal, 1=saw ESC, 2=inside CSI
+    for (size_t i = 0; i < n; i++) {
+        char c = src[i];
+        if (esc == 1) {
+            if (c == '[' || c == '(' || c == ')') esc = 2;
+            else                                   esc = 0;
+            continue;
+        }
+        if (esc == 2) {
+            if ((c >= '@' && c <= '~')) esc = 0;  // terminator byte
+            continue;
+        }
+        if (c == 0x1B) { esc = 1; continue; }
+        if (c == '\r')               continue;
+        if (c == '\b' || c == 0x7F) {
+            if (!dst.empty() && dst.back() != '\n') dst.pop_back();
+            continue;
+        }
+        if (c == '\n' || (c >= 0x20 && c <= 0x7E)) dst.push_back(c);
+    }
+}
+
 void pollChannel() {
     if (!g_channel) return;
 
     char buf[256];
     int  n;
     static std::string carry;
+    bool gotData = false;
 
     while ((n = ssh_channel_read_nonblocking(g_channel, buf, sizeof(buf) - 1, 0)) > 0) {
-        carry.append(buf, n);
+        appendStripped(carry, buf, (size_t)n);
+        gotData = true;
         size_t start = 0;
         for (size_t i = 0; i < carry.size(); i++) {
             if (carry[i] == '\n') {
-                std::string line;
-                for (size_t j = start; j < i; j++) {
-                    char c = carry[j];
-                    if (c == '\r') continue;
-                    if (c >= 0x20 && c <= 0x7E) line.push_back(c);
-                }
-                pushLine(line);
+                pushLine(carry.substr(start, i - start));
                 start = i + 1;
             }
         }
         carry.erase(0, start);
+    }
+
+    // Any trailing partial line (no newline yet) is shown as the last row so
+    // password prompts and similar partial output become visible.
+    if (gotData) {
+        if (!g_lines.empty() && !g_lines.back().empty() && g_lines.back().back() == '\x01') {
+            // marker: previous tail-row — replace it
+            g_lines.pop_back();
+        }
+        if (!carry.empty()) {
+            // Tag with sentinel so we replace it on the next poll.
+            pushLine(carry + std::string(1, '\x01'));
+        }
+        g_dirty = true;
     }
 
     if (ssh_channel_is_eof(g_channel)) {
@@ -389,10 +430,12 @@ void renderTerminal() {
     if (start < 0) start = 0;
     int y = topY;
     for (int i = start; i < (int)g_lines.size(); i++) {
-        d.setTextColor(0xFFFF);
         d.setCursor(6, y);
         std::string s = g_lines[i];
-        if (s.size() > 38) s = s.substr(0, 37) + "…";
+        bool partial = (!s.empty() && s.back() == '\x01');
+        if (partial) s.pop_back();
+        d.setTextColor(partial ? 0xFFE0 : 0xFFFF);
+        if (s.size() > 38) s = s.substr(s.size() - 38);
         d.print(s.c_str());
         y += lineH;
     }
