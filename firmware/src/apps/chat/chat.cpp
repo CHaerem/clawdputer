@@ -17,6 +17,7 @@
 #include "core/app.h"
 #include "core/event_bus.h"
 #include "services/ble.h"
+#include "ui/statusbar.h"
 
 namespace {
 
@@ -36,8 +37,8 @@ int              g_sub   = 0;
 constexpr size_t MAX_LINES = 200;
 constexpr int    LINE_H    = 10;
 constexpr int    MAX_W     = 52;   // chars per line at text size 1 on 320px
-constexpr int    TOP_Y     = 16;
-constexpr int    INPUT_H   = 16;
+constexpr int    TOP_Y     = ui::statusbar::HEIGHT + 4;
+constexpr int    INPUT_H   = 18;
 
 uint16_t colorFor(LineKind k) {
     switch (k) {
@@ -102,19 +103,19 @@ std::vector<std::string> wrap(const std::string& s, size_t maxW) {
 void render() {
     auto& d = M5Cardputer.Display;
     d.fillScreen(BLACK);
+    ui::statusbar::draw();
 
-    d.setTextSize(1);
-    d.setTextColor(0x7BEF);
-    d.setCursor(2, 2);
-    d.printf("chat — %s",
-             ble::isConnected(EventSource::BridgeLink) ? "bridge" : "(no bridge)");
     if (g_busy) {
+        d.setTextSize(1);
         d.setTextColor(0xFFE0);
-        d.print("  streaming…");
+        d.setCursor(4, TOP_Y);
+        d.print("streaming…");
+    } else if (!ble::isConnected(EventSource::BridgeLink)) {
+        d.setTextSize(1);
+        d.setTextColor(0xF800);
+        d.setCursor(4, TOP_Y);
+        d.print("no bridge — start clawd-bridge on host");
     }
-    d.setTextColor(0x7BEF);
-    d.setCursor(240, 2);
-    d.print("[TAB] app");
 
     const int bottomY = 240 - INPUT_H;
 

@@ -12,6 +12,7 @@
 #include "core/app.h"
 #include "core/event_bus.h"
 #include "services/ble.h"
+#include "ui/statusbar.h"
 
 namespace {
 
@@ -30,76 +31,100 @@ int      g_sub         = 0;
 void render() {
     auto& d = M5Cardputer.Display;
     d.fillScreen(BLACK);
+    ui::statusbar::draw();
+
+    int y = ui::statusbar::HEIGHT + 6;
 
     d.setTextSize(2);
     d.setTextColor(WHITE);
-    d.setCursor(6, 4);
-    d.print("clawdputer");
+    d.setCursor(6, y);
+    d.print("Buddy");
+    y += 22;
 
     d.setTextSize(1);
-    d.setCursor(6, 28);
     if (!ble::isConnected(EventSource::NusLink)) {
-        d.setTextColor(0x7BEF);
-        d.print("BLE advertising as");
-        d.setCursor(6, 40);
-        d.setTextColor(WHITE);
+        d.setTextColor(0x8C71);
+        d.setCursor(6, y);
+        d.print("advertising as");
+        y += 12;
+        d.setTextColor(0xFFFF);
+        d.setCursor(6, y);
         d.print(ble::deviceName().c_str());
-        d.setCursor(6, 60);
-        d.setTextColor(0x7BEF);
+        y += 18;
+        d.setTextColor(0x8C71);
+        d.setCursor(6, y);
         d.print("Claude > Developer >");
-        d.setCursor(6, 72);
+        y += 12;
+        d.setCursor(6, y);
         d.print("Open Hardware Buddy");
         return;
     }
 
     d.setTextColor(0x07E0);
+    d.setCursor(6, y);
     d.print("connected");
     if (g_owner.length()) {
-        d.setTextColor(WHITE);
+        d.setTextColor(0xFFFF);
         d.print("  ");
         d.print(g_owner);
     }
+    y += 14;
 
     if (g_promptId.length()) {
-        d.fillRect(0, 44, 240, 90, 0x4800);
+        d.fillRoundRect(4, y, 312, 100, 6, 0x4800);
         d.setTextColor(WHITE);
         d.setTextSize(2);
-        d.setCursor(6, 48);
+        d.setCursor(12, y + 6);
         d.print("APPROVE?");
         d.setTextSize(1);
-        d.setCursor(6, 70);
+        d.setCursor(12, y + 30);
         d.setTextColor(0xFFE0);
         d.print(g_promptTool);
-        d.setCursor(6, 82);
+        d.setCursor(12, y + 44);
         d.setTextColor(WHITE);
         String h = g_promptHint;
-        if (h.length() > 38) h = h.substring(0, 35) + "...";
+        if (h.length() > 44) h = h.substring(0, 41) + "...";
         d.print(h);
-        d.setCursor(6, 102);
+        d.setCursor(12, y + 64);
         d.setTextColor(0x07E0);
-        d.print("[Y] approve   ");
+        d.print("[Y] approve");
+        d.setCursor(140, y + 64);
         d.setTextColor(0xF800);
         d.print("[N] deny");
         return;
     }
 
-    d.setTextColor(WHITE);
-    d.setCursor(6, 44);
-    d.printf("sessions:%d  run:%d  wait:%d", g_total, g_running, g_waiting);
-    d.setCursor(6, 56);
-    d.printf("tokens today: %u", (unsigned)g_tokensToday);
+    d.setTextColor(0x8C71);
+    d.setCursor(6, y);
+    d.print("sessions");
+    d.setCursor(76, y);
+    d.setTextColor(0xFFFF);
+    d.printf("%d  (run %d, wait %d)", g_total, g_running, g_waiting);
+    y += 14;
+
+    d.setTextColor(0x8C71);
+    d.setCursor(6, y);
+    d.print("tokens");
+    d.setCursor(76, y);
+    d.setTextColor(0xFFFF);
+    d.printf("%u today", (unsigned)g_tokensToday);
+    y += 14;
 
     if (g_msg.length()) {
-        d.setCursor(6, 76);
+        d.setCursor(6, y);
         d.setTextColor(0xFFE0);
         String m = g_msg;
-        if (m.length() > 40) m = m.substring(0, 37) + "...";
+        if (m.length() > 50) m = m.substring(0, 47) + "...";
         d.print(m);
+        y += 14;
     }
 
-    d.setCursor(6, 122);
-    d.setTextColor(0x7BEF);
-    d.printf("appr:%u  deny:%u", (unsigned)g_approvals, (unsigned)g_denials);
+    // Footer hint
+    d.fillRect(0, 226, 320, 14, 0x1082);
+    d.drawFastHLine(0, 226, 320, 0x2945);
+    d.setTextColor(0x8C71);
+    d.setCursor(4, 230);
+    d.printf("appr:%u  deny:%u    tab: home", (unsigned)g_approvals, (unsigned)g_denials);
 }
 
 void sendPermission(const String& id, const char* decision) {

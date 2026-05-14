@@ -13,6 +13,7 @@
 #include "services/ble.h"
 #include "services/updater.h"
 #include "services/wifi.h"
+#include "ui/statusbar.h"
 
 #if __has_include("wifi_secrets.h")
 #include "wifi_secrets.h"
@@ -109,46 +110,56 @@ void moveSelection(int dir) {
 void render() {
     auto& d = M5Cardputer.Display;
     d.fillScreen(BLACK);
+    ui::statusbar::draw();
 
     d.setTextSize(2);
     d.setTextColor(WHITE);
-    d.setCursor(6, 4);
-    d.print("settings");
+    d.setCursor(6, ui::statusbar::HEIGHT + 6);
+    d.print("Settings");
 
     d.setTextSize(1);
-    int y = 32;
-    for (size_t i = 0; i < g_items.size(); i++) {
-        bool selected = (int)i == g_selected;
-        if (selected) d.fillRoundRect(4, y - 2, 312, 16, 3, 0x18E3);
+    int y          = ui::statusbar::HEIGHT + 32;
+    int row_h      = 16;
+    int viewport_h = 226 - y;
+    int max_rows   = viewport_h / row_h;
+
+    // Simple scroll: keep selected in view
+    int top = 0;
+    if (g_selected >= max_rows) top = g_selected - max_rows + 1;
+
+    for (int i = top; i < (int)g_items.size() && i < top + max_rows; i++) {
+        bool selected = i == g_selected;
+        if (selected) d.fillRoundRect(4, y - 2, 312, row_h, 3, 0x18E3);
 
         d.setCursor(10, y);
-        d.setTextColor(selected ? 0xFFE0 : 0x7BEF);
+        d.setTextColor(selected ? 0xFFE0 : 0x8C71);
         d.print(g_items[i].label.c_str());
 
         d.setCursor(140, y);
         bool action = g_items[i].action != nullptr;
         if (action) {
             d.setTextColor(selected ? 0xFFFF : 0xFFE0);
-            d.print("[Enter]");
+            d.print("press enter ›");
         } else {
             d.setTextColor(selected ? 0xFFFF : WHITE);
             d.print(g_items[i].value.c_str());
         }
-        y += 18;
-        if (y > 210) break;
+        y += row_h;
     }
 
     if (!g_toast.empty() && millis() < g_toastUntil) {
-        d.fillRect(0, 200, 320, 24, 0x4800);
+        d.fillRect(0, 196, 320, 28, 0x4800);
         d.setTextColor(WHITE);
-        d.setCursor(8, 208);
+        d.setCursor(8, 206);
         d.print(g_toast.c_str());
     }
 
-    d.fillRect(0, 224, 320, 16, 0x2104);
-    d.setTextColor(0x7BEF);
-    d.setCursor(6, 228);
-    d.print("[Fn+;/.] move  [Enter] invoke  [TAB] home");
+    // Footer hint
+    d.fillRect(0, 226, 320, 14, 0x1082);
+    d.drawFastHLine(0, 226, 320, 0x2945);
+    d.setTextColor(0x8C71);
+    d.setCursor(4, 230);
+    d.print("up/down: move   enter: invoke   tab: home");
 }
 
 void onEnter() {

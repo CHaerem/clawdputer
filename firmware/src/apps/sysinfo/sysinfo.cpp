@@ -1,4 +1,6 @@
-// Sysinfo app — live readout of battery, memory, network, and BLE state.
+// Sysinfo app — detailed readout. The global status bar covers the
+// at-a-glance summary; here we show full battery voltage, uptime, free heap,
+// link details, and build/version info.
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
@@ -7,6 +9,7 @@
 #include "services/ble.h"
 #include "services/updater.h"
 #include "services/wifi.h"
+#include "ui/statusbar.h"
 
 namespace {
 
@@ -24,26 +27,27 @@ void formatUptime(char* buf, size_t n, uint32_t secs) {
 
 void drawRow(int& y, const char* label, const char* value, uint16_t valColor = 0xFFFF) {
     auto& d = M5Cardputer.Display;
-    d.setCursor(8, y);
-    d.setTextColor(0x7BEF);
+    d.setCursor(10, y);
+    d.setTextColor(0x8C71);
     d.print(label);
     d.setCursor(110, y);
     d.setTextColor(valColor);
     d.print(value);
-    y += 14;
+    y += 16;
 }
 
 void render() {
     auto& d = M5Cardputer.Display;
     d.fillScreen(BLACK);
+    ui::statusbar::draw();
 
     d.setTextSize(2);
-    d.setTextColor(WHITE);
-    d.setCursor(6, 4);
-    d.print("sysinfo");
+    d.setTextColor(0xFFFF);
+    d.setCursor(6, ui::statusbar::HEIGHT + 6);
+    d.print("Sysinfo");
 
     d.setTextSize(1);
-    int y = 32;
+    int y = ui::statusbar::HEIGHT + 32;
 
     int  bat       = M5Cardputer.Power.getBatteryLevel();
     int  batV_mV   = M5Cardputer.Power.getBatteryVoltage();
@@ -61,14 +65,12 @@ void render() {
     snprintf(buf, sizeof(buf), "%u KB free", (unsigned)(ESP.getFreeHeap() / 1024));
     drawRow(y, "heap",     buf);
 
-    snprintf(buf, sizeof(buf), "%s",
-             ble::isConnected(EventSource::NusLink) ? "connected" : "—");
-    drawRow(y, "buddy",    buf,
+    drawRow(y, "buddy",
+            ble::isConnected(EventSource::NusLink) ? "connected" : "—",
             ble::isConnected(EventSource::NusLink) ? 0x07E0 : 0x4208);
 
-    snprintf(buf, sizeof(buf), "%s",
-             ble::isConnected(EventSource::BridgeLink) ? "connected" : "—");
-    drawRow(y, "bridge",   buf,
+    drawRow(y, "bridge",
+            ble::isConnected(EventSource::BridgeLink) ? "connected" : "—",
             ble::isConnected(EventSource::BridgeLink) ? 0x07E0 : 0x4208);
 
     if (wifi::isConnected()) {
@@ -86,10 +88,12 @@ void render() {
              updater::latestVersion().empty() ? "?" : updater::latestVersion().c_str());
     drawRow(y, "build", buf);
 
-    d.fillRect(0, 224, 320, 16, 0x2104);
-    d.setTextColor(0x7BEF);
-    d.setCursor(6, 228);
-    d.print("[TAB] home");
+    // Footer hint
+    d.fillRect(0, 226, 320, 14, 0x1082);
+    d.drawFastHLine(0, 226, 320, 0x2945);
+    d.setTextColor(0x8C71);
+    d.setCursor(4, 230);
+    d.print("tab: home");
 }
 
 void onEnter() {
