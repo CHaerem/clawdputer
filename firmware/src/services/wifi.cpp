@@ -87,7 +87,45 @@ void setCredentials(const std::string& ssidNew, const std::string& passNew) {
     prefs.putString("pass", passNew.c_str());
     prefs.end();
     Serial.printf("[wifi] credentials saved (ssid=%s)\n", ssidNew.c_str());
-    Serial.println("[wifi] reboot to apply");
+}
+
+void connectNow(const std::string& ssidNew, const std::string& passNew) {
+    setCredentials(ssidNew, passNew);
+
+    if (!g_enabled) {
+        WiFi.mode(WIFI_STA);
+        WiFi.setAutoReconnect(true);
+        WiFi.onEvent(onWifiEvent);
+        g_enabled = true;
+    } else {
+        WiFi.disconnect(false, true);
+    }
+    g_ssid = ssidNew;
+    WiFi.begin(ssidNew.c_str(), passNew.c_str());
+    Serial.printf("[wifi] connectNow to %s\n", ssidNew.c_str());
+}
+
+void startScan() {
+    if (!g_enabled) {
+        WiFi.mode(WIFI_STA);
+        WiFi.setAutoReconnect(true);
+        WiFi.onEvent(onWifiEvent);
+        g_enabled = true;
+    }
+    WiFi.scanNetworks(true /*async*/, true /*show hidden*/);
+}
+
+int scanStatus() {
+    int rc = WiFi.scanComplete();
+    return rc;  // -1=running, -2=failed, >=0=count
+}
+
+ScanResult scanNetwork(int idx) {
+    ScanResult r;
+    r.ssid   = WiFi.SSID(idx).c_str();
+    r.rssi   = WiFi.RSSI(idx);
+    r.secure = WiFi.encryptionType(idx) != WIFI_AUTH_OPEN;
+    return r;
 }
 
 void clearCredentials() {

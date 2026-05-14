@@ -22,7 +22,24 @@ std::string ssid();
 // Persist a new SSID/password pair to NVS. Takes effect on next reboot.
 void setCredentials(const std::string& ssid, const std::string& pass);
 
+// Persist + connect immediately, without rebooting. Saves to NVS and starts
+// a fresh WiFi.begin() against the new SSID/password. Status reflected via
+// isConnected().
+void connectNow(const std::string& ssid, const std::string& pass);
+
 // Wipe stored credentials.
 void clearCredentials();
+
+// Async WiFi scan. startScan() kicks off, scanStatus() polls. Returns count
+// of networks when finished (>=0), -1 while running, -2 if failed.
+void startScan();
+int  scanStatus();  // -1 running, -2 failed, >=0 finished with N nets
+
+struct ScanResult {
+    std::string ssid;
+    int         rssi;
+    bool        secure;
+};
+ScanResult scanNetwork(int idx);
 
 }  // namespace wifi
