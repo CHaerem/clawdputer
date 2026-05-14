@@ -5,11 +5,8 @@
 
 #include "core/app.h"
 #include "services/ble.h"
+#include "services/updater.h"
 #include "services/wifi.h"
-
-#if __has_include("wifi_secrets.h")
-#include "wifi_secrets.h"
-#endif
 
 namespace {
 
@@ -76,19 +73,18 @@ void render() {
 
     if (wifi::isConnected()) {
         drawRow(y, "wifi", wifi::ip().c_str(), 0x07E0);
+    } else if (!wifi::ssid().empty()) {
+        drawRow(y, "wifi", "connecting…", 0xFFE0);
     } else {
-#ifdef CLAWD_WIFI_SSID
-        if (strlen(CLAWD_WIFI_SSID) > 0) {
-            drawRow(y, "wifi", "connecting…", 0xFFE0);
-        } else {
-            drawRow(y, "wifi", "not configured", 0x4208);
-        }
-#else
         drawRow(y, "wifi", "not configured", 0x4208);
-#endif
     }
 
-    drawRow(y, "device",   ble::deviceName().c_str());
+    drawRow(y, "device", ble::deviceName().c_str());
+
+    snprintf(buf, sizeof(buf), "%s (latest: %s)",
+             updater::currentVersion(),
+             updater::latestVersion().empty() ? "?" : updater::latestVersion().c_str());
+    drawRow(y, "build", buf);
 
     d.fillRect(0, 224, 320, 16, 0x2104);
     d.setTextColor(0x7BEF);

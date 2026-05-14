@@ -12,6 +12,7 @@
 #include "core/registry.h"
 #include "services/ble.h"
 #include "services/ota.h"
+#include "services/updater.h"
 #include "services/wifi.h"
 
 namespace {
@@ -92,6 +93,7 @@ void setup() {
     Serial.println("[clawdputer] boot");
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
+    updater::begin();  // first: checks for failed flash + may roll back
     ble::begin();
     wifi::begin();
 
@@ -102,6 +104,7 @@ void setup() {
 void loop() {
     M5Cardputer.update();
     ota::tick();
+    updater::tick();
     if (ota::isUpdating()) {
         // OTA owns the screen and the CPU; skip app ticks until reboot.
         delay(5);

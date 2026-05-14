@@ -1,0 +1,72 @@
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # embed_version.py needs git history
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        working-directory: firmware
+        run: pio run -e cardputer
+
+      - name: Stage release artifacts
+        id: stage
+        run: |
+          SHA=$(git rev-parse --short=7 HEAD)
+          mkdir -p out
+          cp firmware/.pio/build/cardputer/firmware.bin out/firmware.bin
+          printf '%s\n' "$SHA" > out/version.txt
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          ls -lh out
+
+      - name: Publish "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest build (${{ steps.stage.outputs.sha }})"
+          body: |
+            Auto-built from commit ${{ github.sha }}.
+
+            The Cardputer self-update service polls this release every
+            five minutes and applies new firmware automatically.
+          files: |
+            out/firmware.bin
+            out/version.txt
+          fail_on_unmatched_files: true
+          make_latest: "true"

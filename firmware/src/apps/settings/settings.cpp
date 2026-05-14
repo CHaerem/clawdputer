@@ -11,6 +11,7 @@
 #include "core/app.h"
 #include "core/key.h"
 #include "services/ble.h"
+#include "services/updater.h"
 #include "services/wifi.h"
 
 #if __has_include("wifi_secrets.h")
@@ -48,24 +49,40 @@ void actReboot() {
     ESP.restart();
 }
 
+void actCheckUpdate() {
+    updater::checkNow();
+    toast("checking for updates…");
+}
+
+void actClearWifi() {
+    wifi::clearCredentials();
+    toast("WiFi cleared (reboot to apply)");
+}
+
 void rebuild() {
     g_items.clear();
-    g_items.push_back({"device",       ble::deviceName(),                                    nullptr});
-    g_items.push_back({"buddy",        ble::isConnected(EventSource::NusLink)   ? "connected" : "—", nullptr});
-    g_items.push_back({"bridge",       ble::isConnected(EventSource::BridgeLink)? "connected" : "—", nullptr});
-#ifdef CLAWD_WIFI_SSID
-    g_items.push_back({"wifi ssid",    strlen(CLAWD_WIFI_SSID) > 0 ? CLAWD_WIFI_SSID : "(unset)", nullptr});
-#else
-    g_items.push_back({"wifi ssid",    "(unset)", nullptr});
-#endif
-    g_items.push_back({"wifi ip",      wifi::isConnected() ? wifi::ip() : std::string("—"),   nullptr});
+    g_items.push_back({"device",     ble::deviceName(),                                          nullptr});
+    g_items.push_back({"buddy",      ble::isConnected(EventSource::NusLink)   ? "connected" : "—", nullptr});
+    g_items.push_back({"bridge",     ble::isConnected(EventSource::BridgeLink)? "connected" : "—", nullptr});
+    g_items.push_back({"wifi ssid",  wifi::ssid().empty() ? std::string("(unset)") : wifi::ssid(), nullptr});
+    g_items.push_back({"wifi ip",    wifi::isConnected() ? wifi::ip() : std::string("—"),         nullptr});
+    g_items.push_back({"build",      updater::currentVersion(),                                   nullptr});
+
+    std::string ver = updater::latestVersion();
+    std::string latestStr = ver.empty()
+        ? std::string(updater::statusText())
+        : (ver + std::string(" (") + updater::statusText() + ")");
+    g_items.push_back({"latest",     latestStr,                                                   nullptr});
+
 #ifdef CLAWD_OTA_PASSWORD
-    g_items.push_back({"ota password", "set",                                                 nullptr});
+    g_items.push_back({"ota password", "set",                                                    nullptr});
 #else
-    g_items.push_back({"ota password", "(unset)",                                             nullptr});
+    g_items.push_back({"ota password", "(unset)",                                                nullptr});
 #endif
-    g_items.push_back({"clear BLE bonds", "",                                                 actClearBonds});
-    g_items.push_back({"reboot device",   "",                                                 actReboot});
+    g_items.push_back({"check for updates", "",                                                  actCheckUpdate});
+    g_items.push_back({"clear WiFi creds",  "",                                                  actClearWifi});
+    g_items.push_back({"clear BLE bonds",   "",                                                  actClearBonds});
+    g_items.push_back({"reboot device",     "",                                                  actReboot});
 
     if (g_selected >= (int)g_items.size()) g_selected = (int)g_items.size() - 1;
     if (g_selected < 0) g_selected = 0;

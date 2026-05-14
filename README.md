@@ -49,22 +49,47 @@ the Cardputer) with the Arduino framework and the `M5Cardputer` library.
 
 ### Wireless updates (OTA)
 
-Once the device is on the same WiFi as your laptop, you can flash without
-plugging in the USB cable:
+Three different OTA flows are available; pick by use case.
 
-1. Copy `firmware/src/wifi_secrets.h.example` to `firmware/src/wifi_secrets.h`
-   and fill in `CLAWD_WIFI_SSID` / `CLAWD_WIFI_PASS`. Optionally also set
-   `CLAWD_OTA_PASSWORD` to require auth on uploads.
-2. Flash over USB once so the new firmware learns the credentials.
-3. From then on:
+**1. Push from your laptop (espota)** — fastest iteration:
 
-   ```bash
-   pio run -e cardputer-ota -t upload
-   ```
+```bash
+pio run -e cardputer-ota -t upload
+```
 
-The device advertises itself as `clawdputer.local` on the LAN. The screen
-takes over with a progress bar while flashing — don't unplug power until
-it reboots.
+The device advertises itself as `clawdputer.local` on the LAN. Requires
+`firmware/src/wifi_secrets.h` with `CLAWD_WIFI_SSID` / `CLAWD_WIFI_PASS`
+when *first* flashed via USB — credentials then migrate to NVS and
+survive future updates.
+
+**2. GitOps — push to main, device updates itself.**
+
+Every push that touches `firmware/**` triggers
+`.github/workflows/firmware.yml`, which builds the binary and publishes
+to a `latest` release on GitHub. The device's `updater` service polls
+that release every 5 minutes and self-flashes when a new build SHA
+appears. Manual trigger: Settings → "check for updates".
+
+The current running version's short git SHA is embedded at build time
+(`CLAWD_BUILD_SHA`) and shown in Sysinfo / Settings.
+
+**Rollback safety:** before each self-flash the new partition is marked
+"pending" in NVS. After reboot the new firmware must run cleanly for 30
+seconds to clear the flag. If three consecutive boots fail to confirm
+health, the bootloader is pointed back at the previous partition and
+the device reverts. Manual recovery: USB-flash from a working host.
+
+**3. Initial provisioning** — see "First-time setup" below.
+
+### First-time setup
+
+1. Copy `firmware/src/wifi_secrets.h.example` to
+   `firmware/src/wifi_secrets.h` and fill in `CLAWD_WIFI_SSID` /
+   `CLAWD_WIFI_PASS`.
+2. `cd firmware && pio run -e cardputer -t upload` (one USB flash).
+3. The firmware migrates the credentials to NVS on first boot. From
+   that point on, `wifi_secrets.h` is no longer needed — both espota
+   and GitOps updates inherit the stored credentials.
 
 ## Hardware
 

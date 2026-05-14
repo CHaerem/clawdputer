@@ -145,6 +145,33 @@ flashing firmware and running the bridge against the actual device.
 5. Flash, then run bridge. Watch logs in
    `~/Library/Logs/clawd-bridge/` if running as a launchd agent.
 
+## GitOps self-update
+
+Every push to `main` that touches `firmware/**` runs
+`.github/workflows/firmware.yml`, which builds and publishes
+`firmware.bin` + `version.txt` to the `latest` GitHub release.
+
+On device, `services/updater.cpp`:
+- polls `version.txt` every 5 minutes (or on-demand via Settings)
+- compares the SHA against `CLAWD_BUILD_SHA` (set by
+  `firmware/scripts/embed_version.py` from `git rev-parse --short HEAD`)
+- streams `firmware.bin` into the inactive OTA partition via HTTPUpdate
+  when newer
+
+**Rollback** is app-level (ESP-IDF's built-in rollback is not enabled
+because it requires a framework rebuild):
+1. Before flashing, `pending=true` and `boots=0` written to NVS.
+2. After reboot, `updater::begin()` increments `boots` if `pending` is
+   still set.
+3. If `boots > 3` we call `esp_ota_set_boot_partition()` on the
+   previous slot and reset — restoring the last-known-good firmware.
+4. `updater::tick()` clears `pending` 30 seconds into a healthy run.
+
+**Credentials survive updates.** `services/wifi.cpp` reads SSID/password
+from NVS. First-boot migration copies compile-time secrets (from
+`wifi_secrets.h`) into NVS so CI-built firmware (which has no secrets
+file) keeps the same network on subsequent updates.
+
 ## Notes on the chat path
 
 The bridge spawns `claude` per turn with:
