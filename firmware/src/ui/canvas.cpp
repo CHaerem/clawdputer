@@ -14,7 +14,7 @@ LovyanGFX& display() {
     if (!g_tried) {
         g_tried = true;
         g_canvas.setColorDepth(16);
-        if (g_canvas.createSprite(320, 240)) {
+        if (g_canvas.createSprite(SCREEN_W, SCREEN_H)) {
             g_ready = true;
             Serial.printf("[ui] canvas ready (free heap %u)\n",
                           (unsigned)ESP.getFreeHeap());

@@ -2,20 +2,15 @@
 
 #include <M5Cardputer.h>
 
-// Backbuffer wrapper. Apps draw onto ui::display() and call ui::flush() once
-// per frame — the entire sprite is pushed to the physical display in one
-// atomic SPI transfer, eliminating the per-element flicker you get from
-// drawing straight to M5Cardputer.Display.
-//
-// Falls back to direct display drawing if the sprite can't be allocated
-// (low heap conditions), so apps can use display() unconditionally.
+// Screen dimensions for Cardputer (1.14" IPS) in landscape orientation
+// (setRotation(1)). The whole UI is sized around these numbers.
+constexpr int SCREEN_W = 240;
+constexpr int SCREEN_H = 135;
 
 namespace ui {
 
-// Returns the active drawing target: a backbuffer sprite if allocation
-// succeeded, otherwise the physical display.
 LovyanGFX& display();
-void   beginFrame();
-void   flush();
+void       beginFrame();
+void       flush();
 
 }  // namespace ui

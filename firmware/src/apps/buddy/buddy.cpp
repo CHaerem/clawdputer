@@ -34,30 +34,25 @@ void render() {
     ui::beginFrame();
     ui::statusbar::draw();
 
-    int y = ui::statusbar::HEIGHT + 6;
-
-    d.setTextSize(2);
-    d.setTextColor(WHITE);
-    d.setCursor(6, y);
-    d.print("Buddy");
-    y += 22;
+    int y = ui::statusbar::HEIGHT + 4;
 
     d.setTextSize(1);
     if (!ble::isConnected(EventSource::NusLink)) {
         d.setTextColor(0x8C71);
         d.setCursor(6, y);
         d.print("advertising as");
-        y += 12;
+        y += 11;
         d.setTextColor(0xFFFF);
         d.setCursor(6, y);
         d.print(ble::deviceName().c_str());
-        y += 18;
+        y += 16;
         d.setTextColor(0x8C71);
         d.setCursor(6, y);
         d.print("Claude > Developer >");
-        y += 12;
+        y += 10;
         d.setCursor(6, y);
         d.print("Open Hardware Buddy");
+        ui::flush();
         return;
     }
 
@@ -66,66 +61,65 @@ void render() {
     d.print("connected");
     if (g_owner.length()) {
         d.setTextColor(0xFFFF);
-        d.print("  ");
+        d.print(" ");
         d.print(g_owner);
     }
-    y += 14;
+    y += 12;
 
     if (g_promptId.length()) {
-        d.fillRoundRect(4, y, 312, 100, 6, 0x4800);
+        d.fillRoundRect(4, y, SCREEN_W - 8, 80, 4, 0x4800);
         d.setTextColor(WHITE);
         d.setTextSize(2);
-        d.setCursor(12, y + 6);
+        d.setCursor(10, y + 4);
         d.print("APPROVE?");
         d.setTextSize(1);
-        d.setCursor(12, y + 30);
+        d.setCursor(10, y + 26);
         d.setTextColor(0xFFE0);
         d.print(g_promptTool);
-        d.setCursor(12, y + 44);
+        d.setCursor(10, y + 38);
         d.setTextColor(WHITE);
         String h = g_promptHint;
-        if (h.length() > 44) h = h.substring(0, 41) + "...";
+        if (h.length() > 36) h = h.substring(0, 33) + "...";
         d.print(h);
-        d.setCursor(12, y + 64);
+        d.setCursor(10, y + 58);
         d.setTextColor(0x07E0);
         d.print("[Y] approve");
-        d.setCursor(140, y + 64);
+        d.setCursor(110, y + 58);
         d.setTextColor(0xF800);
         d.print("[N] deny");
+        ui::flush();
         return;
     }
 
     d.setTextColor(0x8C71);
     d.setCursor(6, y);
     d.print("sessions");
-    d.setCursor(76, y);
+    d.setCursor(64, y);
     d.setTextColor(0xFFFF);
-    d.printf("%d  (run %d, wait %d)", g_total, g_running, g_waiting);
-    y += 14;
+    d.printf("%d (r%d w%d)", g_total, g_running, g_waiting);
+    y += 11;
 
     d.setTextColor(0x8C71);
     d.setCursor(6, y);
     d.print("tokens");
-    d.setCursor(76, y);
+    d.setCursor(64, y);
     d.setTextColor(0xFFFF);
     d.printf("%u today", (unsigned)g_tokensToday);
-    y += 14;
+    y += 11;
 
     if (g_msg.length()) {
         d.setCursor(6, y);
         d.setTextColor(0xFFE0);
         String m = g_msg;
-        if (m.length() > 50) m = m.substring(0, 47) + "...";
+        if (m.length() > 38) m = m.substring(0, 35) + "...";
         d.print(m);
-        y += 14;
     }
 
-    // Footer hint
-    d.fillRect(0, 226, 320, 14, 0x1082);
-    d.drawFastHLine(0, 226, 320, 0x2945);
+    d.fillRect(0, 124, SCREEN_W, 11, 0x1082);
+    d.drawFastHLine(0, 124, SCREEN_W, 0x2945);
     d.setTextColor(0x8C71);
-    d.setCursor(4, 230);
-    d.printf("appr:%u  deny:%u    tab: home", (unsigned)g_approvals, (unsigned)g_denials);
+    d.setCursor(4, 127);
+    d.printf("a:%u d:%u  tab: home", (unsigned)g_approvals, (unsigned)g_denials);
 
     ui::flush();
 }

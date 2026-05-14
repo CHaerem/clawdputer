@@ -37,9 +37,9 @@ int              g_sub   = 0;
 
 constexpr size_t MAX_LINES = 200;
 constexpr int    LINE_H    = 10;
-constexpr int    MAX_W     = 52;   // chars per line at text size 1 on 320px
+constexpr int    MAX_W     = 38;   // chars per line at text size 1 on 240px wide
 constexpr int    TOP_Y     = ui::statusbar::HEIGHT + 4;
-constexpr int    INPUT_H   = 18;
+constexpr int    INPUT_H   = 14;
 
 uint16_t colorFor(LineKind k) {
     switch (k) {
@@ -115,10 +115,10 @@ void render() {
         d.setTextSize(1);
         d.setTextColor(0xF800);
         d.setCursor(4, TOP_Y);
-        d.print("no bridge — start clawd-bridge on host");
+        d.print("no bridge");
     }
 
-    const int bottomY = 240 - INPUT_H;
+    const int bottomY = SCREEN_H - INPUT_H;
 
     // Walk history newest-first, collect wrapped rows bottom-up until full.
     struct Row {
@@ -143,12 +143,12 @@ void render() {
         yLine -= LINE_H;
     }
 
-    d.fillRect(0, 240 - INPUT_H, 320, INPUT_H, 0x2104);
+    d.fillRect(0, SCREEN_H - INPUT_H, SCREEN_W, INPUT_H, 0x2104);
     d.setTextColor(WHITE);
-    d.setCursor(2, 240 - INPUT_H + 4);
+    d.setCursor(2, SCREEN_H - INPUT_H + 3);
     d.print("> ");
     std::string in = g_input;
-    if (in.size() > 50) in = std::string("…") + in.substr(in.size() - 49);
+    if (in.size() > 36) in = std::string("…") + in.substr(in.size() - 35);
     d.print(in.c_str());
     if ((millis() / 500) % 2 == 0) {
         d.print("_");
