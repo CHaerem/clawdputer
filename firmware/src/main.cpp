@@ -10,6 +10,8 @@
 #include "core/app.h"
 #include "core/registry.h"
 #include "services/ble.h"
+#include "services/ota.h"
+#include "services/wifi.h"
 
 namespace {
 
@@ -65,6 +67,7 @@ void setup() {
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
     ble::begin();
+    wifi::begin();
 
     // First registered app wins for now. A launcher screen comes later when
     // more than one app is in the build.
@@ -77,6 +80,12 @@ void setup() {
 
 void loop() {
     M5Cardputer.update();
+    ota::tick();
+    if (ota::isUpdating()) {
+        // OTA owns the screen and the CPU; skip app ticks until reboot.
+        delay(5);
+        return;
+    }
     dispatchKeys();
     if (g_active && g_active->onTick) g_active->onTick();
     if (g_active && g_active->onDraw) g_active->onDraw();

@@ -10,6 +10,7 @@
 enum class EventSource : uint8_t {
     NusLink,     // Claude Desktop buddy
     BridgeLink,  // clawd-bridge daemon
+    WifiLink,    // wifi service (network up/down)
 };
 
 enum class EventType : uint8_t {

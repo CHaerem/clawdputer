@@ -47,6 +47,25 @@ pio device monitor      # serial console
 PlatformIO targets the `m5stack-stamps3` board (the ESP32-S3 module inside
 the Cardputer) with the Arduino framework and the `M5Cardputer` library.
 
+### Wireless updates (OTA)
+
+Once the device is on the same WiFi as your laptop, you can flash without
+plugging in the USB cable:
+
+1. Copy `firmware/src/wifi_secrets.h.example` to `firmware/src/wifi_secrets.h`
+   and fill in `CLAWD_WIFI_SSID` / `CLAWD_WIFI_PASS`. Optionally also set
+   `CLAWD_OTA_PASSWORD` to require auth on uploads.
+2. Flash over USB once so the new firmware learns the credentials.
+3. From then on:
+
+   ```bash
+   pio run -e cardputer-ota -t upload
+   ```
+
+The device advertises itself as `clawdputer.local` on the LAN. The screen
+takes over with a progress bar while flashing — don't unplug power until
+it reboots.
+
 ## Hardware
 
 M5Stack Cardputer: ESP32-S3, 320×240 IPS, 56-key keyboard, BLE, WiFi, IR,

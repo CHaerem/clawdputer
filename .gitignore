@@ -3,6 +3,9 @@
 .DS_Store
 *.swp
 
+# Per-device secrets (WiFi credentials, OTA password)
+firmware/src/wifi_secrets.h
+
 # Swift Package Manager
 .build/
 .swiftpm/
