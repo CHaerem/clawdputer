@@ -19,6 +19,8 @@ final class TCPListener {
     var onConnected:  (() -> Void)?
     var onDisconnect: (() -> Void)?
 
+    private var announced = false
+
     init() throws {
         let params: NWParameters = .tcp
         params.acceptLocalOnly = false
@@ -26,13 +28,15 @@ final class TCPListener {
         self.listener = try NWListener(using: params, on: .any)
 
         listener.newConnectionHandler = { [weak self] c in self?.accept(c) }
-        listener.stateUpdateHandler   = { state in
+        listener.stateUpdateHandler   = { [weak self] state in
             print("[tcp] listener state: \(state)")
+            if case .ready = state { self?.announce() }
         }
         listener.start(queue: .main)
     }
 
     func announce() {
+        guard !announced else { return }
         guard let port = listener.port?.rawValue else { return }
         let svc = NetService(domain: "local.",
                              type:   "_clawd-bridge._tcp.",
@@ -40,6 +44,7 @@ final class TCPListener {
                              port:   Int32(port))
         svc.publish()
         netService = svc
+        announced = true
         print("[tcp] listening on port \(port), announced as clawdputer-bridge._clawd-bridge._tcp.local.")
     }
 

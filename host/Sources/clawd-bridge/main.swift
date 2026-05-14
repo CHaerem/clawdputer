@@ -6,6 +6,10 @@
 
 import Foundation
 
+// Disable stdout buffering so launchd/log tailing sees output in realtime.
+setbuf(stdout, nil)
+setbuf(stderr, nil)
+
 let namePrefix = ProcessInfo.processInfo.environment["CLAWD_NAME_PREFIX"] ?? "Claude-Cardputer"
 let claudeCwd  = ProcessInfo.processInfo.environment["CLAWD_CHAT_CWD"]
     .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
@@ -16,9 +20,7 @@ let session       = ClaudeSession(cwd: claudeCwd)
 let subscriptions = Subscriptions()
 let tcp: TCPListener? = {
     do {
-        let t = try TCPListener()
-        t.announce()
-        return t
+        return try TCPListener()  // announce() fires automatically once .ready
     } catch {
         fputs("[bridge] TCP listener failed: \(error). BLE-only mode.\n", stderr)
         return nil

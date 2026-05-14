@@ -85,12 +85,13 @@ private:
 class SrvCallback : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer*, NimBLEConnInfo&) override {
         Serial.println("[ble] peer connected");
+        // Keep advertising so a second central (buddy + bridge in parallel,
+        // or bridge while Claude Desktop is already paired) can still find
+        // us. NimBLE stops advertising by default after the first connect.
+        NimBLEDevice::startAdvertising();
     }
     void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
         Serial.printf("[ble] peer disconnected (reason=%d)\n", reason);
-        // If the disconnecting peer was subscribed, NimBLE delivers an
-        // onSubscribe(0) before this — so per-link state already tore down.
-        // Restart advertising so additional centrals can still find us.
         NimBLEDevice::startAdvertising();
     }
 };
