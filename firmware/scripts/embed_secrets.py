@@ -5,7 +5,6 @@ The generated header declares one byte array per sealed blob, plus its
 length. App code includes the header and feeds the bytes through the
 mbedTLS AES-GCM decryptor (services/sealed.cpp)."""
 
-import os
 from pathlib import Path
 
 Import("env")  # noqa: F821 — PlatformIO global

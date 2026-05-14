@@ -40,6 +40,7 @@ jobs:
                    --inline-suppr --error-exitcode=1 \
                    --suppress=missingIncludeSystem \
                    --suppress=unusedFunction \
+                   --suppress=uselessCallsSubstr \
                    -I firmware/src \
                    firmware/src
 

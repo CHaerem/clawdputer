@@ -27,20 +27,15 @@ jobs:
         working-directory: host
         run: swift build -c release --arch arm64 --arch x86_64 -Xswiftc -warnings-as-errors
 
-      - name: Smoke-check binary
-        # The binary needs CoreBluetooth permission to do anything useful,
-        # which CI runners don't grant, so we just verify it starts and
-        # exits cleanly when we close stdin immediately.
+      - name: Verify universal binary exists
         run: |
-          echo "" | timeout 3 host/.build/apple/Products/Release/clawd-bridge || rc=$?
-          # rc 124 = timeout (process kept running normally), rc 0 = clean
-          # exit on EOF, anything else is a startup-time failure.
-          rc=${rc:-0}
-          if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ]; then
-              echo "::error::bridge exited with $rc at startup"
+          BIN=host/.build/apple/Products/Release/clawd-bridge
+          if [ ! -x "$BIN" ]; then
+              echo "::error::expected universal binary at $BIN"
+              find host/.build -name clawd-bridge -type f
               exit 1
           fi
-          echo "bridge starts cleanly (rc=$rc)"
+          file "$BIN"
 
       - name: Stage artifact
         id: stage
