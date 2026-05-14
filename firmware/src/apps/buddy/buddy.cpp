@@ -46,17 +46,25 @@ bool     g_attentionPinged = false;
 
 constexpr uint32_t CELEBRATE_STEP_TOKENS = 50000;
 
-const char* petFace(PetState s) {
+// Crab body colour per state — keeps the shape recognisable as a crab
+// while the mood comes through colour + facial features.
+struct CrabSkin {
+    uint16_t body;   // shell colour
+    uint16_t accent; // claw / leg accent
+    uint16_t eye;    // pupil / blink colour
+};
+
+CrabSkin crabSkin(PetState s) {
     switch (s) {
-        case PetState::Sleep:     return "(-.-) zzz";
-        case PetState::Idle:      return "(o.o)";
-        case PetState::Busy:      return "(>_<)";
-        case PetState::Attention: return "(O_O)!";
-        case PetState::Celebrate: return "\\(^o^)/";
-        case PetState::Dizzy:     return "(@_@)";
-        case PetState::Heart:     return "(<3_<3)";
+        case PetState::Sleep:     return { 0x4A49, 0x52AA, 0x0000 };  // dim red
+        case PetState::Idle:      return { 0xF800, 0xC800, 0x0000 };  // bright red
+        case PetState::Busy:      return { 0xFD20, 0xC400, 0x0000 };  // orange
+        case PetState::Attention: return { 0xF800, 0xFFE0, 0xFFFF };  // red, yellow accents
+        case PetState::Celebrate: return { 0xFC1F, 0xFFE0, 0x0000 };  // pink + yellow
+        case PetState::Dizzy:     return { 0xFD20, 0x8800, 0x0000 };
+        case PetState::Heart:     return { 0xFC1F, 0xF81F, 0xF800 };  // pink with red heart pupils
     }
-    return "(o.o)";
+    return { 0xF800, 0xC800, 0x0000 };
 }
 
 uint16_t petColor(PetState s) {
@@ -72,18 +80,130 @@ uint16_t petColor(PetState s) {
     return 0xFFFF;
 }
 
+// Draws a small crab (~56×44 px) anchored at (originX, originY top-left).
+// Layout:
+//                .--.        .--.
+//               /    \      /    \         <- claws
+//               \    /------\    /
+//                '--'  body  '--'
+//                     |o  o|                <- eyes on top of shell
+//                     +----+
+//                     | || |                <- under-belly
+//                     ||  ||                <- legs
+void drawCrab(int ox, int oy, PetState s, uint32_t now) {
+    auto& d  = ui::display();
+    auto sk  = crabSkin(s);
+    bool blink = (now / 400) % 12 == 0;
+
+    // Body (rounded shell).
+    int bx = ox + 14, by = oy + 10, bw = 28, bh = 18;
+    d.fillRoundRect(bx, by, bw, bh, 6, sk.body);
+    // Shell highlight stripe
+    d.drawFastHLine(bx + 4, by + 4, bw - 8, sk.accent);
+
+    // Eye stalks
+    d.drawFastVLine(bx + 8,  by - 3, 4, sk.accent);
+    d.drawFastVLine(bx + 19, by - 3, 4, sk.accent);
+    // Eyes
+    if (s == PetState::Sleep) {
+        d.drawFastHLine(bx + 7,  by - 4, 4, 0xFFFF);
+        d.drawFastHLine(bx + 18, by - 4, 4, 0xFFFF);
+    } else {
+        d.fillCircle(bx + 9,  by - 4, 2, 0xFFFF);
+        d.fillCircle(bx + 20, by - 4, 2, 0xFFFF);
+        if (!blink || s == PetState::Attention) {
+            d.fillCircle(bx + 9,  by - 4, 1, sk.eye);
+            d.fillCircle(bx + 20, by - 4, 1, sk.eye);
+        }
+    }
+
+    // Claws — two larger ovals, raised when celebrating
+    int clawDrop = (s == PetState::Celebrate) ? -6 : 0;
+    int clawL_x = ox + 2,  clawR_x = ox + bw + 14;
+    int claw_y  = oy + 10 + clawDrop;
+    d.fillRoundRect(clawL_x, claw_y, 12, 10, 4, sk.body);
+    d.fillRoundRect(clawR_x, claw_y, 12, 10, 4, sk.body);
+    // Pincer split (a small accent slit)
+    d.drawFastHLine(clawL_x + 2, claw_y + 4, 4, sk.accent);
+    d.drawFastHLine(clawR_x + 6, claw_y + 4, 4, sk.accent);
+    // Connecting "arms" to body
+    d.drawLine(clawL_x + 12, claw_y + 5, bx,      by + 6, sk.accent);
+    d.drawLine(clawR_x,      claw_y + 5, bx + bw, by + 6, sk.accent);
+
+    // Legs — three pairs sticking out and down
+    for (int i = 0; i < 3; i++) {
+        int lx = bx + 4 + i * 8;
+        int ly = by + bh;
+        d.drawLine(lx,     ly,     lx - 2, ly + 5, sk.accent);
+        d.drawLine(lx + 18 - i * 8, ly,
+                   lx + 20 - i * 8, ly + 5, sk.accent);
+    }
+
+    // Mouth / expression cue under the eyes
+    int mx = bx + bw / 2 - 3, my = by + 6;
+    switch (s) {
+        case PetState::Sleep:
+            d.drawFastHLine(mx, my, 6, sk.accent);
+            // little zzz
+            d.setTextSize(1);
+            d.setTextColor(0xC618);
+            d.setCursor(ox + bw + 24, oy + 4);
+            d.print("z");
+            d.setCursor(ox + bw + 28, oy);
+            d.print("Z");
+            break;
+        case PetState::Busy:
+            d.drawLine(mx, my + 1, mx + 2, my - 1, sk.accent);
+            d.drawLine(mx + 4, my - 1, mx + 6, my + 1, sk.accent);
+            break;
+        case PetState::Attention:
+            // open "!" mouth
+            d.fillCircle(bx + bw / 2, my + 1, 2, 0x0000);
+            // bang above head
+            d.setTextSize(1);
+            d.setTextColor(0xFFE0);
+            d.setCursor(ox + bw / 2 + 10, oy);
+            d.print("!");
+            break;
+        case PetState::Celebrate:
+            // smiling arc
+            d.drawPixel(mx,     my,     sk.accent);
+            d.drawPixel(mx + 6, my,     sk.accent);
+            d.drawFastHLine(mx + 1, my + 1, 5, sk.accent);
+            // confetti dots
+            d.fillCircle(ox + 4,  oy + 2, 1, 0xFFE0);
+            d.fillCircle(ox + 50, oy + 5, 1, 0x07FF);
+            d.fillCircle(ox + 30, oy,     1, 0xF81F);
+            break;
+        case PetState::Dizzy:
+            // tongue out
+            d.fillRect(mx + 2, my, 3, 3, 0xF800);
+            // swirl above
+            d.drawCircle(ox + 28, oy + 2, 3, 0x8C71);
+            d.drawCircle(ox + 28, oy + 2, 5, 0x8C71);
+            break;
+        case PetState::Heart:
+            // smile + floating heart
+            d.drawFastHLine(mx + 1, my + 1, 4, sk.accent);
+            d.fillCircle(ox + 28, oy + 2, 2, 0xF81F);
+            d.fillCircle(ox + 31, oy + 2, 2, 0xF81F);
+            d.fillTriangle(ox + 26, oy + 4, ox + 33, oy + 4, ox + 29, oy + 8, 0xF81F);
+            break;
+        case PetState::Idle:
+        default:
+            d.drawFastHLine(mx + 1, my + 1, 4, sk.accent);
+            break;
+    }
+}
+
 void drawPet() {
     if (!settings::petEnabled()) return;
-    auto& d = ui::display();
-    d.setTextSize(2);
-    d.setTextColor(petColor(g_pet));
-    int x = SCREEN_W - 88;
-    int y = ui::statusbar::HEIGHT + 4;
-    // Tiny "breath" wobble: jiggle x by 1 px on alternating half-seconds
-    // when idle, so it doesn't feel frozen.
-    if (g_pet == PetState::Idle && ((millis() / 500) % 2 == 0)) x += 1;
-    d.setCursor(x, y);
-    d.print(petFace(g_pet));
+    uint32_t now = millis();
+    int ox = SCREEN_W - 70;
+    int oy = ui::statusbar::HEIGHT + 10;
+    // Idle "breath" — 1 px vertical wobble every half second
+    if (g_pet == PetState::Idle && (now / 500) % 2 == 0) oy += 1;
+    drawCrab(ox, oy, g_pet, now);
 }
 
 void render() {
