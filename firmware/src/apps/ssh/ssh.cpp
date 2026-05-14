@@ -16,6 +16,8 @@
 #include <Arduino.h>
 #include <M5Cardputer.h>
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <libssh/libssh.h>
 #include <libssh_esp32.h>
 
@@ -64,6 +66,18 @@ std::string             g_input;
 ssh_session             g_session = nullptr;
 ssh_channel             g_channel = nullptr;
 SshHost                 g_active  = {};
+
+// libssh's handshake nests through mbedTLS and easily blows past Arduino's
+// 8 KB loopTask stack. We run the blocking handshake on a dedicated 24 KB
+// task pinned to Core 1 (loopTask is on Core 1; NimBLE on Core 0, so the
+// move keeps each subsystem's stack pressure separate). The worker writes
+// a result code via the volatile flags below; main thread polls them.
+TaskHandle_t      g_sshTask           = nullptr;
+volatile bool     g_handshakeDone     = false;
+volatile bool     g_handshakeOk       = false;
+SshHost           g_pending           = {};
+char              g_pendingHostBuf[64] = {0};
+char              g_pendingUserBuf[64] = {0};
 
 constexpr size_t MAX_LINES = 100;
 
@@ -137,9 +151,18 @@ void teardown() {
     bridge::resume();
 }
 
+bool doConnectBlocking(const SshHost& h);
+
+void sshConnectTask(void* arg) {
+    SshHost* h = static_cast<SshHost*>(arg);
+    g_handshakeOk   = doConnectBlocking(*h);
+    g_handshakeDone = true;
+    vTaskDelete(nullptr);
+}
+
+// Kick off the worker. Returns immediately; main loop polls g_handshakeDone.
 bool startConnection(const SshHost& h) {
-    // libssh handshake needs ~50 KB of contiguous heap. Refuse early with
-    // a clear error rather than crashing partway through.
+    // libssh + mbedTLS scratch needs ~50 KB heap; refuse early if tight.
     uint32_t freeHeap = ESP.getFreeHeap();
     if (freeHeap < 60000) {
         char buf[64];
@@ -148,12 +171,31 @@ bool startConnection(const SshHost& h) {
         return false;
     }
 
-    // Tell the bridge service to stop its mDNS / TCP pump while we hold the
-    // mbedTLS context. Reduces the chance of a heap fight during handshake.
-    bridge::pause();
+    // Copy host/user into stable storage — kSshHosts pointers come from
+    // firmware rodata but g_savedHosts entries point into a vector that
+    // may move while the worker is running.
+    strncpy(g_pendingHostBuf, h.host ? h.host : "", sizeof(g_pendingHostBuf) - 1);
+    strncpy(g_pendingUserBuf, h.user ? h.user : "", sizeof(g_pendingUserBuf) - 1);
+    g_pending      = h;
+    g_pending.host = g_pendingHostBuf;
+    g_pending.user = g_pendingUserBuf;
 
+    bridge::pause();          // free mbedTLS heap for the worker
+    g_handshakeDone = false;
+    g_handshakeOk   = false;
+    BaseType_t rc = xTaskCreatePinnedToCore(
+        sshConnectTask, "ssh-connect", 24576, &g_pending, 1, &g_sshTask, 1);
+    if (rc != pdPASS) {
+        g_status = "could not start ssh task";
+        bridge::resume();
+        return false;
+    }
+    return true;
+}
+
+bool doConnectBlocking(const SshHost& h) {
     g_session = ssh_new();
-    if (!g_session) { g_status = "ssh_new failed"; bridge::resume(); return false; }
+    if (!g_session) { g_status = "ssh_new failed"; return false; }
 
     int port    = h.port > 0 ? h.port : 22;
     int verbose = SSH_LOG_NOLOG;
@@ -524,25 +566,35 @@ void onTick() {
     if (g_stage == Stage::Connected) pollChannel();
 
     if (g_stage == Stage::Connecting) {
-        if (!wifi::isConnected()) {
-            g_status = "wifi not connected";
-            g_stage  = Stage::Error;
-            g_dirty  = true;
+        // First entry into Connecting: validate + kick off worker task.
+        if (g_sshTask == nullptr) {
+            if (!wifi::isConnected()) {
+                g_status = "wifi not connected";
+                g_stage  = Stage::Error;
+                g_dirty  = true;
+                return;
+            }
+            if (!g_active.host) {
+                g_status = "no host";
+                g_stage  = Stage::Error;
+                g_dirty  = true;
+                return;
+            }
+            if (!startConnection(g_active)) {
+                teardown();
+                g_stage = Stage::Error;
+                g_dirty = true;
+            }
             return;
         }
-        if (!g_active.host) {
-            g_status = "no host";
-            g_stage  = Stage::Error;
-            g_dirty  = true;
-            return;
-        }
-        if (!startConnection(g_active)) {
+        // Worker running — wait for it to flip g_handshakeDone.
+        if (!g_handshakeDone) return;
+        g_sshTask = nullptr;
+        bridge::resume();
+        if (!g_handshakeOk) {
             teardown();
             g_stage = Stage::Error;
-        } else {
-            bridge::resume();  // handshake done, safe to pump again
-        }
-        if (g_stage == Stage::Connecting && g_adhocConnected) {
+        } else if (g_adhocConnected) {
             g_stage = Stage::AskSave;
         } else {
             g_stage = Stage::Connected;

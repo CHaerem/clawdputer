@@ -19,7 +19,7 @@ uint32_t g_lastActivity = 0;
 uint32_t g_cpuMhz       = 240;
 uint8_t  g_backlight    = 255;
 
-void applyClock(uint32_t mhz) {
+[[maybe_unused]] void applyClock(uint32_t mhz) {
     if (mhz == g_cpuMhz) return;
     setCpuFrequencyMhz(mhz);
     g_cpuMhz = mhz;
@@ -35,13 +35,11 @@ void applyBacklight(uint8_t v) {
 
 void begin() {
     g_lastActivity = millis();
-    applyClock(ACTIVE_CPU_MHZ);
     applyBacklight(255);
 }
 
 void noteActivity() {
     g_lastActivity = millis();
-    applyClock(ACTIVE_CPU_MHZ);
     applyBacklight(255);
 }
 
@@ -49,16 +47,17 @@ void tick() {
     uint32_t now      = millis();
     uint32_t idleMs   = now - g_lastActivity;
 
+    // CPU-clock scaling is disabled for now — changing the clock while
+    // WiFi/BLE are active is a known ESP32 gotcha that can crash the radio
+    // stack. Display dimming is the safe part of this service.
     if (idleMs >= OFF_AFTER_MS) {
         applyBacklight(0);
-        applyClock(IDLE_CPU_MHZ);
     } else if (idleMs >= DIM_AFTER_MS) {
         applyBacklight(64);
-        applyClock(IDLE_CPU_MHZ);
-    } else if (idleMs >= ACTIVE_WINDOW_MS) {
-        applyClock(IDLE_CPU_MHZ);
+    } else {
         applyBacklight(255);
     }
+    (void)applyClock;  // kept defined so it's easy to re-enable later
 }
 
 uint8_t backlightLevel() { return g_backlight; }
