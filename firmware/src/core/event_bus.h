@@ -1,30 +1,35 @@
 #pragma once
 
+#include <stdint.h>
+
 #include <functional>
 #include <string>
 
-enum class EventType {
-    BleConnected,
-    BleDisconnected,
-    BleLine,
+// Which BLE link produced the event. Apps subscribe to the same bus and
+// filter by source so buddy doesn't see bridge traffic and vice versa.
+enum class EventSource : uint8_t {
+    NusLink,     // Claude Desktop buddy
+    BridgeLink,  // clawd-bridge daemon
+};
+
+enum class EventType : uint8_t {
+    LinkConnected,
+    LinkDisconnected,
+    LinkLine,
 };
 
 struct Event {
     EventType   type;
-    std::string data;  // populated for BleLine; empty otherwise
+    EventSource source;
+    std::string data;  // populated for LinkLine; empty otherwise
 };
 
 namespace events {
 
 using Handler = std::function<void(const Event&)>;
 
-// Subscribe to events. Returns a token usable with unsubscribe(). Subscriptions
-// are intended to be made from app onEnter and released in onExit.
 int  subscribe(Handler h);
 void unsubscribe(int token);
-
-// Publish an event to all current subscribers. Called from service threads
-// (e.g. BLE callbacks); handlers run inline on the publisher's thread.
 void publish(const Event& e);
 
 }  // namespace events

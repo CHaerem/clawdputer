@@ -33,9 +33,9 @@ separate service UUID so the two links don't conflict.
 | RX (bridge → Cardputer)        | `c1aedb01-1d0c-4adc-9b1a-c1aedb010001` |
 | TX (Cardputer → bridge)        | `c1aedb01-1d0c-4adc-9b1a-c1aedb010002` |
 
-> Status (2026-05-14): firmware exposes NUS only; the bridge service is
-> defined here but not yet implemented. The first bridge MVP reuses NUS for
-> bring-up testing.
+> Status (2026-05-14): firmware exposes both services. Advertising only
+> carries the NUS UUID (so Claude Desktop's scan filter matches), and the
+> bridge service is discovered after connecting.
 
 ## Framing
 

@@ -8,9 +8,15 @@ import CoreBluetooth
 import Foundation
 
 final class BLECentral: NSObject {
-    static let nusService = CBUUID(string: "6e400001-b5a3-f393-e0a9-e50e24dcca9e")
-    static let nusRx      = CBUUID(string: "6e400002-b5a3-f393-e0a9-e50e24dcca9e")
-    static let nusTx      = CBUUID(string: "6e400003-b5a3-f393-e0a9-e50e24dcca9e")
+    // Advertising filter — the Cardputer only advertises NUS so Claude
+    // Desktop's scan can find it. We scan by that too, then discover the
+    // bridge service after connecting.
+    static let advService    = CBUUID(string: "6e400001-b5a3-f393-e0a9-e50e24dcca9e")
+
+    // clawd-bridge service — see protocol/WIRE.md
+    static let bridgeService = CBUUID(string: "c1aedb01-1d0c-4adc-9b1a-c1aedb010000")
+    static let bridgeRx      = CBUUID(string: "c1aedb01-1d0c-4adc-9b1a-c1aedb010001")
+    static let bridgeTx      = CBUUID(string: "c1aedb01-1d0c-4adc-9b1a-c1aedb010002")
 
     private var manager: CBCentralManager!
     private var peripheral: CBPeripheral?
@@ -51,7 +57,7 @@ extension BLECentral: CBCentralManagerDelegate {
         switch central.state {
         case .poweredOn:
             print("[ble] powered on, scanning for \(namePrefix)*…")
-            central.scanForPeripherals(withServices: [Self.nusService], options: nil)
+            central.scanForPeripherals(withServices: [Self.advService], options: nil)
         case .poweredOff:
             fputs("[ble] bluetooth off\n", stderr)
         case .unauthorized:
@@ -81,14 +87,14 @@ extension BLECentral: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         print("[ble] connected, discovering services…")
-        peripheral.discoverServices([Self.nusService])
+        peripheral.discoverServices([Self.bridgeService])
     }
 
     func centralManager(_ central: CBCentralManager,
                         didFailToConnect peripheral: CBPeripheral,
                         error: Error?) {
         fputs("[ble] connect failed: \(error?.localizedDescription ?? "?")\n", stderr)
-        central.scanForPeripherals(withServices: [Self.nusService], options: nil)
+        central.scanForPeripherals(withServices: [Self.advService], options: nil)
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -99,7 +105,7 @@ extension BLECentral: CBCentralManagerDelegate {
         self.rxChar = nil
         lineBuffer.removeAll()
         onDisconnect?()
-        central.scanForPeripherals(withServices: [Self.nusService], options: nil)
+        central.scanForPeripherals(withServices: [Self.advService], options: nil)
     }
 }
 
@@ -109,8 +115,8 @@ extension BLECentral: CBPeripheralDelegate {
             fputs("[ble] discoverServices: \(e.localizedDescription)\n", stderr)
             return
         }
-        for svc in peripheral.services ?? [] where svc.uuid == Self.nusService {
-            peripheral.discoverCharacteristics([Self.nusRx, Self.nusTx], for: svc)
+        for svc in peripheral.services ?? [] where svc.uuid == Self.bridgeService {
+            peripheral.discoverCharacteristics([Self.bridgeRx, Self.bridgeTx], for: svc)
         }
     }
 
@@ -118,8 +124,8 @@ extension BLECentral: CBPeripheralDelegate {
                     didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
         for c in service.characteristics ?? [] {
-            if c.uuid == Self.nusRx { rxChar = c }
-            if c.uuid == Self.nusTx { peripheral.setNotifyValue(true, for: c) }
+            if c.uuid == Self.bridgeRx { rxChar = c }
+            if c.uuid == Self.bridgeTx { peripheral.setNotifyValue(true, for: c) }
         }
         if rxChar != nil {
             print("[ble] ready")
@@ -130,7 +136,7 @@ extension BLECentral: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateValueFor characteristic: CBCharacteristic,
                     error: Error?) {
-        guard characteristic.uuid == Self.nusTx, let data = characteristic.value else { return }
+        guard characteristic.uuid == Self.bridgeTx, let data = characteristic.value else { return }
         lineBuffer.append(data)
         while let nl = lineBuffer.firstIndex(of: 0x0A) {
             let lineData = lineBuffer.subdata(in: lineBuffer.startIndex..<nl)

@@ -38,7 +38,7 @@ void render() {
 
     d.setTextSize(1);
     d.setCursor(6, 28);
-    if (!ble::isConnected()) {
+    if (!ble::isConnected(EventSource::NusLink)) {
         d.setTextColor(0x7BEF);
         d.print("BLE advertising as");
         d.setCursor(6, 40);
@@ -109,7 +109,7 @@ void sendPermission(const String& id, const char* decision) {
     doc["decision"] = decision;
     std::string out;
     serializeJson(doc, out);
-    ble::sendLine(out);
+    ble::sendLine(EventSource::NusLink, out);
 }
 
 void handleSnapshot(JsonDocument& doc) {
@@ -139,11 +139,11 @@ void handleCommand(JsonDocument& doc) {
 
     if (c == "owner") {
         if (doc["name"].is<const char*>()) g_owner = (const char*)doc["name"];
-        ble::sendLine("{\"ack\":\"owner\",\"ok\":true,\"n\":0}");
+        ble::sendLine(EventSource::NusLink, "{\"ack\":\"owner\",\"ok\":true,\"n\":0}");
         g_screenDirty = true;
     } else if (c == "name") {
         if (doc["name"].is<const char*>()) ble::setDeviceName((const char*)doc["name"]);
-        ble::sendLine("{\"ack\":\"name\",\"ok\":true,\"n\":0}");
+        ble::sendLine(EventSource::NusLink, "{\"ack\":\"name\",\"ok\":true,\"n\":0}");
     } else if (c == "status") {
         JsonDocument resp;
         resp["ack"] = "status";
@@ -160,9 +160,9 @@ void handleCommand(JsonDocument& doc) {
         stats["deny"] = g_denials;
         std::string out;
         serializeJson(resp, out);
-        ble::sendLine(out);
+        ble::sendLine(EventSource::NusLink, out);
     } else if (c == "unpair") {
-        ble::sendLine("{\"ack\":\"unpair\",\"ok\":true,\"n\":0}");
+        ble::sendLine(EventSource::NusLink, "{\"ack\":\"unpair\",\"ok\":true,\"n\":0}");
         ble::clearBonds();
     }
     // Other commands (char_begin/file/chunk/...): intentionally no ack.
@@ -185,11 +185,12 @@ void handleLine(const std::string& line) {
 }
 
 void onEvent(const Event& e) {
+    if (e.source != EventSource::NusLink) return;
     switch (e.type) {
-        case EventType::BleConnected:
+        case EventType::LinkConnected:
             g_screenDirty = true;
             break;
-        case EventType::BleDisconnected:
+        case EventType::LinkDisconnected:
             g_msg             = "";
             g_promptId        = "";
             g_promptTool      = "";
@@ -197,7 +198,7 @@ void onEvent(const Event& e) {
             g_lastHeartbeatMs = 0;
             g_screenDirty     = true;
             break;
-        case EventType::BleLine:
+        case EventType::LinkLine:
             handleLine(e.data);
             break;
     }
@@ -215,7 +216,7 @@ void onExit() {
 }
 
 void onTick() {
-    if (ble::isConnected() && g_lastHeartbeatMs &&
+    if (ble::isConnected(EventSource::NusLink) && g_lastHeartbeatMs &&
         (millis() - g_lastHeartbeatMs > 30000)) {
         g_msg             = "(no heartbeat)";
         g_screenDirty     = true;
