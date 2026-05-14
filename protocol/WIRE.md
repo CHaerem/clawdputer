@@ -98,6 +98,31 @@ prefer line-aligned splits when output is line-buffered.
 {"evt":"error","where":"chat","msg":"claude exited with status 1"}
 ```
 
+### Claude usage report
+
+Cardputer asks for a usage summary; bridge responds with figures pulled
+from `~/.claude/stats-cache.json` (daily activity) and
+`claude --print --output-format json "/cost"` (cost + tokens).
+
+```json
+// device → bridge
+{"evt":"usage.request"}
+
+// bridge → device
+{
+  "evt":"usage.response",
+  "today":   {"messages": 8901, "sessions": 5, "tools": 1234},
+  "week":    {"messages": 45678, "sessions": 23, "tools": 6789},
+  "month":   {"messages": 234567, "sessions": 89, "tools": 23456},
+  "cost":    {"usd": 0, "tier": "subscription"},
+  "tokens":  {"input": 0, "output": 0, "cacheRead": 0, "cacheCreate": 0},
+  "asOf":    "2026-05-14"
+}
+```
+
+Either side MAY omit fields that aren't available (e.g. older stats-cache
+versions without `toolCallCount`).
+
 ## Open questions
 
 - Session resume across reconnects: does the bridge keep the `claude` CLI

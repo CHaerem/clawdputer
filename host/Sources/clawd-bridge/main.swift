@@ -35,6 +35,9 @@ central.onLine = { line in
     if env.evt == "chat.send", let text = env.text {
         print("→ chat.send: \(text.prefix(80))")
         session.send(text)
+    } else if env.evt == "usage.request" {
+        print("→ usage.request")
+        Usage.collect { report in send(report) }
     } else if env.cmd == "hello" || env.evt == nil && env.cmd == nil {
         // Silent — device-side hello or unrelated frame.
     } else {
