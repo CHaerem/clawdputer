@@ -62,22 +62,19 @@ void draw() {
     d.print("wf");
     drawLinkDot(68, y + 3, wifi::isConnected());
 
-    // Uptime in the centre-right
-    char buf[16];
-    uint32_t s = millis() / 1000;
-    uint32_t h = s / 3600;
-    uint32_t m = (s / 60) % 60;
-    if (h > 0) snprintf(buf, sizeof(buf), "%uh%02um", (unsigned)h, (unsigned)m);
-    else      snprintf(buf, sizeof(buf), "%um%02us", (unsigned)m, (unsigned)(s % 60));
-    int textW = strlen(buf) * 6;
-    d.setCursor(SCREEN_W - 28 - textW, y);
-    d.setTextColor(0x8C71);
-    d.print(buf);
-
-    // Battery right-most
+    // Battery percent + icon, right-most
     int  pct      = M5Cardputer.Power.getBatteryLevel();
     bool charging = M5Cardputer.Power.isCharging();
-    drawBatteryIcon(SCREEN_W - 22, y - 1, pct, charging);
+    char pctBuf[8];
+    snprintf(pctBuf, sizeof(pctBuf), "%d%%", pct);
+    int pctW = (int)strlen(pctBuf) * 6;
+    int iconX = SCREEN_W - 20;
+    int pctX  = iconX - pctW - 2;
+    uint16_t pctColor = pct < 20 ? 0xF800 : (pct < 50 ? 0xFFE0 : 0xC618);
+    d.setCursor(pctX, y);
+    d.setTextColor(pctColor);
+    d.print(pctBuf);
+    drawBatteryIcon(iconX, y - 1, pct, charging);
 }
 
 }  // namespace ui::statusbar

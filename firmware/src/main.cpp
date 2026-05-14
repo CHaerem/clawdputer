@@ -53,6 +53,10 @@ struct LastKey {
     uint32_t    at;
 } g_lastKey;
 
+void dispatchSideButton() {
+    if (M5Cardputer.BtnA.wasPressed()) goHome();
+}
+
 void dispatchKeys() {
     if (!M5Cardputer.Keyboard.isChange()) return;
     if (!M5Cardputer.Keyboard.isPressed()) return;
@@ -155,6 +159,7 @@ void loop() {
         g_pending = nullptr;
         enter(next);
     }
+    dispatchSideButton();
     dispatchKeys();
     if (g_active && g_active->onTick) g_active->onTick();
     if (g_active && g_active->onDraw) g_active->onDraw();
