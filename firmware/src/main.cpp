@@ -7,6 +7,8 @@
 #include <Arduino.h>
 #include <M5Cardputer.h>
 
+#include <string>
+
 #include "core/app.h"
 #include "core/key.h"
 #include "core/registry.h"
@@ -43,10 +45,37 @@ void goHome() {
     else if (registry::count() > 0) enter(registry::at(0));
 }
 
+// Last keystate snapshot — read by the home app to render an on-screen
+// debug line. Helpful when a key combo isn't doing what we expect.
+struct LastKey {
+    bool        fn, opt, shift, ctrl, alt, tab, del, enter, space;
+    std::string word;
+    uint32_t    at;
+} g_lastKey;
+
 void dispatchKeys() {
     if (!M5Cardputer.Keyboard.isChange()) return;
     if (!M5Cardputer.Keyboard.isPressed()) return;
     auto state = M5Cardputer.Keyboard.keysState();
+
+    g_lastKey.fn    = state.fn;
+    g_lastKey.opt   = state.opt;
+    g_lastKey.shift = state.shift;
+    g_lastKey.ctrl  = state.ctrl;
+    g_lastKey.alt   = state.alt;
+    g_lastKey.tab   = state.tab;
+    g_lastKey.del   = state.del;
+    g_lastKey.enter = state.enter;
+    g_lastKey.space = state.space;
+    g_lastKey.word.clear();
+    for (char c : state.word) g_lastKey.word.push_back(c);
+    g_lastKey.at = millis();
+
+    Serial.printf("[key] fn=%d opt=%d shift=%d tab=%d enter=%d del=%d word='",
+                  (int)state.fn, (int)state.opt, (int)state.shift,
+                  (int)state.tab, (int)state.enter, (int)state.del);
+    for (char c : state.word) Serial.printf("%c", c);
+    Serial.println("'");
 
     if (state.tab) {
         goHome();
@@ -55,27 +84,22 @@ void dispatchKeys() {
 
     if (!g_active || !g_active->onKey) return;
 
-    // Fn + ;./, → arrow keys. Translate first; if any of those keys are
-    // present in this keystate, suppress the corresponding literal char.
-    if (state.fn) {
-        bool handled = false;
-        for (char ch : state.word) {
+    // Translate ; . , / to arrow keys when either Fn is held (standard
+    // Cardputer convention) OR the active app is menu-style. Text-input
+    // apps (keysAsArrows=false) only get the arrow translation with Fn.
+    bool aliasArrows = state.fn || g_active->keysAsArrows;
+    for (char ch : state.word) {
+        if (aliasArrows) {
             switch (ch) {
-                case ';': g_active->onKey(key::Up);    handled = true; break;
-                case '.': g_active->onKey(key::Down);  handled = true; break;
-                case ',': g_active->onKey(key::Left);  handled = true; break;
-                case '/': g_active->onKey(key::Right); handled = true; break;
+                case ';': g_active->onKey(key::Up);    continue;
+                case '.': g_active->onKey(key::Down);  continue;
+                case ',': g_active->onKey(key::Left);  continue;
+                case '/': g_active->onKey(key::Right); continue;
                 default: break;
             }
         }
-        if (handled) {
-            if (state.enter) g_active->onKey('\n');
-            if (state.del)   g_active->onKey('\b');
-            return;
-        }
+        g_active->onKey(ch);
     }
-
-    for (char ch : state.word) g_active->onKey(ch);
     if (state.enter) g_active->onKey('\n');
     if (state.del)   g_active->onKey('\b');
 }
@@ -85,6 +109,15 @@ void dispatchKeys() {
 // Apps call this to queue a switch. Applied at the start of the next loop
 // iteration so the caller's onKey/onTick can return cleanly first.
 void clawd_request_app(const App* app) { g_pending = app; }
+
+extern "C" const char* clawd_last_key_summary() {
+    static char buf[80];
+    snprintf(buf, sizeof(buf),
+             "fn=%d opt=%d sh=%d en=%d del=%d w='%.20s'",
+             (int)g_lastKey.fn, (int)g_lastKey.opt, (int)g_lastKey.shift,
+             (int)g_lastKey.enter, (int)g_lastKey.del, g_lastKey.word.c_str());
+    return buf;
+}
 
 void setup() {
     auto cfg = M5.config();

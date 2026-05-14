@@ -26,6 +26,12 @@ struct App {
     AppKeyFn       onKey;
     AppLifecycleFn onDraw;
     AppEventFn     onEvent;
+
+    // Menu-style apps don't accept arbitrary text input, so the four physical
+    // keys printed with arrow glyphs (; . , /) get translated to key::Up/
+    // Down/Left/Right even without Fn held. Set to false for text-input apps
+    // (chat) where ;./,/ must reach onKey as literal characters.
+    bool           keysAsArrows = true;
 };
 
 void registerApp(const App* app);

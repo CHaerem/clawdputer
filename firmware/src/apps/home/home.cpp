@@ -1,5 +1,9 @@
 // Home — grid launcher. Arrow keys move between tiles, Enter launches.
 // Tab from any other app brings the user back here.
+//
+// Cardputer's `;./,/` keys (printed with arrow glyphs) work as arrows here
+// without holding Fn, because home is declared as keysAsArrows=true. The
+// global dispatcher applies the alias; this app just consumes key::Up/etc.
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
@@ -21,11 +25,11 @@ std::vector<const App*> g_tiles;
 int  g_selected = 0;
 bool g_dirty    = true;
 
-constexpr int COLS = 3;
-constexpr int TILE_W = 96;
-constexpr int TILE_H = 72;
-constexpr int GAP_X  = 8;
-constexpr int GAP_Y  = 10;
+constexpr int COLS     = 3;
+constexpr int TILE_W   = 96;
+constexpr int TILE_H   = 72;
+constexpr int GAP_X    = 8;
+constexpr int GAP_Y    = 10;
 constexpr int GRID_TOP = ui::statusbar::HEIGHT + 8;
 
 void rebuildList() {
@@ -38,13 +42,12 @@ void rebuildList() {
     if (g_selected >= (int)g_tiles.size()) g_selected = 0;
 }
 
-// Pick a tile color from the app id so each app has a stable visual identity.
 uint16_t tileColor(const App* a) {
     if (!a || !a->id) return 0x18E3;
-    if (!strcmp(a->id, "buddy"))    return 0x328A;   // dim teal
-    if (!strcmp(a->id, "chat"))     return 0x2986;   // dim blue
-    if (!strcmp(a->id, "sysinfo"))  return 0x3A86;   // dim purple
-    if (!strcmp(a->id, "settings")) return 0x4208;   // grey
+    if (!strcmp(a->id, "buddy"))    return 0x328A;
+    if (!strcmp(a->id, "chat"))     return 0x2986;
+    if (!strcmp(a->id, "sysinfo"))  return 0x3A86;
+    if (!strcmp(a->id, "settings")) return 0x4208;
     return 0x18E3;
 }
 
@@ -82,7 +85,6 @@ void drawTile(int col, int row, const App* a, bool selected) {
 
     if (a->description) {
         d.setTextColor(selected ? 0xFFFF : 0xC618);
-        // wrap onto 2 lines if needed
         std::string desc = a->description;
         int maxChars = 14;
         if ((int)desc.size() > maxChars) {
@@ -110,13 +112,12 @@ void render() {
         drawTile(col, row, g_tiles[i], (int)i == g_selected);
     }
 
-    // Footer hint
     d.fillRect(0, 226, 320, 14, 0x1082);
     d.drawFastHLine(0, 226, 320, 0x2945);
     d.setTextColor(0x8C71);
     d.setTextSize(1);
     d.setCursor(4, 230);
-    d.print("arrows: move   enter: launch   1-9: jump");
+    d.print(";,./ or Fn+arrows: move   enter: launch   1-9: jump");
 
     ui::flush();
 }
@@ -144,9 +145,9 @@ void onTick() {
 
 void onKey(char ch) {
     if (g_tiles.empty()) return;
-    int n   = (int)g_tiles.size();
-    int row = g_selected / COLS;
-    int col = g_selected % COLS;
+    int n    = (int)g_tiles.size();
+    int row  = g_selected / COLS;
+    int col  = g_selected % COLS;
     int rows = (n + COLS - 1) / COLS;
 
     if (ch == key::Up) {
