@@ -205,7 +205,7 @@ void onDraw() {
 App settings_app = {
     .id          = "settings",
     .name        = "Settings",
-    .description = "Device info & actions",
+    .description = "Info & actions",
     .services    = SVC_NONE,
     .onEnter     = onEnter,
     .onExit      = onExit,

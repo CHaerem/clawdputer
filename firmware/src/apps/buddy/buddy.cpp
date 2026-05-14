@@ -280,7 +280,7 @@ void onDraw() {
 App buddy_app = {
     .id          = "buddy",
     .name        = "Buddy",
-    .description = "Claude Desktop companion",
+    .description = "Claude Desktop companion",  // wraps to 2 lines in tile
     .services    = SVC_BLE,
     .onEnter     = onEnter,
     .onExit      = onExit,

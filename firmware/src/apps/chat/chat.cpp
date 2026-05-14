@@ -250,7 +250,7 @@ void onDraw() {
 App chat_app = {
     .id           = "chat",
     .name         = "Chat",
-    .description  = "Remote for claude CLI on Mac",
+    .description  = "Claude CLI remote",
     .services     = SVC_BLE,
     .onEnter      = onEnter,
     .onExit       = onExit,

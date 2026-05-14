@@ -125,7 +125,7 @@ void onDraw() {
 App sysinfo_app = {
     .id          = "sysinfo",
     .name        = "Sysinfo",
-    .description = "Battery, memory, network",
+    .description = "Battery & network",
     .services    = SVC_NONE,
     .onEnter     = onEnter,
     .onExit      = onExit,

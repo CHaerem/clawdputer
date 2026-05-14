@@ -25,12 +25,17 @@ std::vector<const App*> g_tiles;
 int  g_selected = 0;
 bool g_dirty    = true;
 
-constexpr int COLS     = 3;
-constexpr int TILE_W   = 96;
-constexpr int TILE_H   = 72;
-constexpr int GAP_X    = 8;
-constexpr int GAP_Y    = 10;
-constexpr int GRID_TOP = ui::statusbar::HEIGHT + 8;
+// Layout chosen for the typical small handful of apps. The grid adapts
+// between 2 and 3 columns based on count so we don't end up with a half-
+// empty row, and the tiles size themselves to fill the viewport.
+constexpr int GRID_TOP    = ui::statusbar::HEIGHT + 6;
+constexpr int GRID_BOTTOM = 224;
+constexpr int MARGIN_X    = 6;
+constexpr int GAP         = 6;
+
+int g_cols   = 2;
+int g_tileW  = 150;
+int g_tileH  = 92;
 
 void rebuildList() {
     g_tiles.clear();
@@ -40,6 +45,17 @@ void rebuildList() {
         g_tiles.push_back(a);
     }
     if (g_selected >= (int)g_tiles.size()) g_selected = 0;
+
+    int n = (int)g_tiles.size();
+    g_cols = (n <= 4) ? 2 : 3;
+    int rows = (n + g_cols - 1) / g_cols;
+    if (rows < 1) rows = 1;
+
+    int availW = 320 - 2 * MARGIN_X - (g_cols - 1) * GAP;
+    int availH = GRID_BOTTOM - GRID_TOP - (rows - 1) * GAP;
+    g_tileW = availW / g_cols;
+    g_tileH = availH / rows;
+    if (g_tileH > 92) g_tileH = 92;  // cap so 1-row layouts don't get gigantic
 }
 
 uint16_t tileColor(const App* a) {
@@ -61,20 +77,20 @@ uint16_t tileAccent(const App* a) {
 }
 
 void drawTile(int col, int row, const App* a, bool selected) {
-    int x = 6 + col * (TILE_W + GAP_X);
-    int y = GRID_TOP + row * (TILE_H + GAP_Y);
+    int x = MARGIN_X + col * (g_tileW + GAP);
+    int y = GRID_TOP + row * (g_tileH + GAP);
     auto& d = ui::display();
 
     uint16_t bg     = tileColor(a);
     uint16_t accent = tileAccent(a);
     if (selected) {
-        d.fillRoundRect(x - 2, y - 2, TILE_W + 4, TILE_H + 4, 6, accent);
+        d.fillRoundRect(x - 2, y - 2, g_tileW + 4, g_tileH + 4, 6, accent);
     }
-    d.fillRoundRect(x, y, TILE_W, TILE_H, 5, bg);
+    d.fillRoundRect(x, y, g_tileW, g_tileH, 5, bg);
 
     d.setTextSize(2);
     d.setTextColor(accent);
-    d.setCursor(x + 8, y + 10);
+    d.setCursor(x + 8, y + 8);
     char glyph = a->name[0];
     d.print(glyph);
 
@@ -85,17 +101,18 @@ void drawTile(int col, int row, const App* a, bool selected) {
 
     if (a->description) {
         d.setTextColor(selected ? 0xFFFF : 0xC618);
+        const int maxChars = g_tileW / 6 - 2;  // ~6px per char
         std::string desc = a->description;
-        int maxChars = 14;
+        d.setCursor(x + 6, y + 32);
         if ((int)desc.size() > maxChars) {
             int split = desc.rfind(' ', maxChars);
             if (split < 0) split = maxChars;
-            d.setCursor(x + 6, y + 36);
             d.print(desc.substr(0, split).c_str());
-            d.setCursor(x + 6, y + 48);
-            d.print(desc.substr(split + 1).c_str());
+            d.setCursor(x + 6, y + 44);
+            std::string rest = desc.substr(split + 1);
+            if ((int)rest.size() > maxChars) rest = rest.substr(0, maxChars - 1) + "…";
+            d.print(rest.c_str());
         } else {
-            d.setCursor(x + 6, y + 42);
             d.print(desc.c_str());
         }
     }
@@ -107,8 +124,8 @@ void render() {
     ui::statusbar::draw();
 
     for (size_t i = 0; i < g_tiles.size(); i++) {
-        int col = i % COLS;
-        int row = i / COLS;
+        int col = i % g_cols;
+        int row = i / g_cols;
         drawTile(col, row, g_tiles[i], (int)i == g_selected);
     }
 
@@ -146,18 +163,18 @@ void onTick() {
 void onKey(char ch) {
     if (g_tiles.empty()) return;
     int n    = (int)g_tiles.size();
-    int row  = g_selected / COLS;
-    int col  = g_selected % COLS;
-    int rows = (n + COLS - 1) / COLS;
+    int row  = g_selected / g_cols;
+    int col  = g_selected % g_cols;
+    int rows = (n + g_cols - 1) / g_cols;
 
     if (ch == key::Up) {
         row = (row - 1 + rows) % rows;
     } else if (ch == key::Down) {
         row = (row + 1) % rows;
     } else if (ch == key::Left) {
-        col = (col - 1 + COLS) % COLS;
+        col = (col - 1 + g_cols) % g_cols;
     } else if (ch == key::Right) {
-        col = (col + 1) % COLS;
+        col = (col + 1) % g_cols;
     } else if (ch == '\n') {
         launchSelected();
         return;
@@ -171,7 +188,7 @@ void onKey(char ch) {
     } else {
         return;
     }
-    int next = row * COLS + col;
+    int next = row * g_cols + col;
     if (next >= n) next = n - 1;
     g_selected = next;
     g_dirty    = true;
