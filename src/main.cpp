@@ -211,10 +211,12 @@ class RxCallback : public NimBLECharacteristicCallbacks {
 
 class SrvCallback : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer* s, NimBLEConnInfo& info) override {
+        Serial.println("[clawdputer] BLE connected");
         g_connected = true;
         g_screenDirty = true;
     }
     void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
+        Serial.printf("[clawdputer] BLE disconnected (reason=%d)\n", reason);
         g_connected = false;
         g_msg = "";
         g_promptId = ""; g_promptTool = ""; g_promptHint = "";
@@ -254,17 +256,24 @@ void setup() {
     M5Cardputer.begin(cfg, true);
     M5Cardputer.Display.setRotation(1);
 
+    Serial.begin(115200);
+    delay(200);
+    Serial.println();
+    Serial.println("[clawdputer] boot");
+
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_BT);
     char nm[40];
     snprintf(nm, sizeof(nm), "Claude-Cardputer-%02X%02X", mac[4], mac[5]);
     g_deviceName = nm;
+    Serial.printf("[clawdputer] name=%s\n", g_deviceName.c_str());
 
     render();
 
     NimBLEDevice::init(g_deviceName.c_str());
     NimBLEDevice::setSecurityAuth(true, false, true);
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    NimBLEDevice::setPower(9);  // dBm
+    Serial.println("[clawdputer] NimBLE init ok");
 
     auto server = NimBLEDevice::createServer();
     server->setCallbacks(new SrvCallback());
@@ -280,11 +289,26 @@ void setup() {
         NUS_TX,
         NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ_ENC);
 
+    // Split adv across the primary packet and scan response so neither overflows
+    // 31 bytes. Primary packet carries flags + 128-bit service UUID; scan
+    // response carries the complete local name.
     auto adv = NimBLEDevice::getAdvertising();
-    adv->addServiceUUID(NUS_SERVICE);
-    adv->setName(std::string(g_deviceName.c_str()));
+
+    NimBLEAdvertisementData advData;
+    advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
+    advData.setCompleteServices(NimBLEUUID(NUS_SERVICE));
+    adv->setAdvertisementData(advData);
+
+    NimBLEAdvertisementData scanData;
+    scanData.setName(std::string(g_deviceName.c_str()));
+    adv->setScanResponseData(scanData);
+
     adv->enableScanResponse(true);
-    adv->start();
+    if (adv->start()) {
+        Serial.println("[clawdputer] advertising started");
+    } else {
+        Serial.println("[clawdputer] ADVERTISING START FAILED");
+    }
 }
 
 void loop() {
