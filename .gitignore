@@ -3,6 +3,11 @@
 .DS_Store
 *.swp
 
+# Local Claude Code state — never commit
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+wokwi-serial.log
+
 # Per-device secrets (WiFi credentials, OTA password)
 firmware/src/wifi_secrets.h
 
