@@ -15,6 +15,7 @@
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
+#include <Preferences.h>
 #include <libssh/libssh.h>
 #include <libssh_esp32.h>
 
@@ -33,17 +34,29 @@
 namespace {
 
 enum class Stage : uint8_t {
-    Picker,        // choose a host from kSshHosts
+    Picker,        // choose a sealed/saved host or "+ new"
+    Form,          // type host/user for an ad-hoc connect
     Connecting,
     Connected,
+    AskSave,       // after first ad-hoc success: persist to NVS?
     Error,
 };
+
+enum class FormField : uint8_t { Host, User };
 
 Stage                g_stage    = Stage::Picker;
 int                  g_selected = 0;
 std::string          g_status;
 bool                 g_dirty    = true;
-std::vector<SshHost> g_hosts;
+std::vector<SshHost> g_hosts;          // sealed presets
+std::vector<SshHost> g_savedHosts;     // NVS-stored ad-hoc adds
+std::vector<std::string> g_savedStrings;  // backing storage for g_savedHosts
+
+// Ad-hoc form state
+FormField   g_formField  = FormField::Host;
+std::string g_formHost;
+std::string g_formUser;
+bool        g_adhocConnected = false;  // true → AskSave applies on disconnect
 
 std::deque<std::string> g_lines;
 std::string             g_input;
@@ -52,6 +65,55 @@ ssh_channel             g_channel = nullptr;
 SshHost                 g_active  = {};
 
 constexpr size_t MAX_LINES = 100;
+
+const char* intern(const std::string& s) {
+    g_savedStrings.push_back(s);
+    return g_savedStrings.back().c_str();
+}
+
+void loadSavedHosts() {
+    g_savedHosts.clear();
+    g_savedStrings.clear();
+
+    Preferences prefs;
+    prefs.begin("ssh", true);
+    int n = prefs.getInt("count", 0);
+    for (int i = 0; i < n; i++) {
+        char key[16];
+        snprintf(key, sizeof(key), "h%d", i);
+        String blob = prefs.getString(key, "");
+        if (blob.length() == 0) continue;
+        // Stored as "host\tuser\tport" — simple to parse, no JSON dependency.
+        std::string s = blob.c_str();
+        size_t a = s.find('\t');
+        size_t b = s.find('\t', a == std::string::npos ? 0 : a + 1);
+        if (a == std::string::npos || b == std::string::npos) continue;
+        std::string host = s.substr(0, a);
+        std::string user = s.substr(a + 1, b - a - 1);
+        int         port = atoi(s.substr(b + 1).c_str());
+        SshHost h;
+        h.name = intern(host);  // display the host as the name
+        h.host = g_savedStrings.back().c_str();
+        h.user = intern(user);
+        h.port = port > 0 ? port : 22;
+        g_savedHosts.push_back(h);
+    }
+    prefs.end();
+}
+
+void saveHost(const SshHost& h) {
+    Preferences prefs;
+    prefs.begin("ssh", false);
+    int n = prefs.getInt("count", 0);
+    char key[16];
+    snprintf(key, sizeof(key), "h%d", n);
+    char blob[128];
+    snprintf(blob, sizeof(blob), "%s\t%s\t%d", h.host, h.user, h.port);
+    prefs.putString(key, blob);
+    prefs.putInt("count", n + 1);
+    prefs.end();
+    Serial.printf("[ssh] saved host %s@%s\n", h.user, h.host);
+}
 
 void pushLine(const std::string& s) {
     g_lines.push_back(s);
@@ -182,37 +244,43 @@ void renderPicker() {
     d.setCursor(6, ui::statusbar::HEIGHT + 3);
     d.print("SSH hosts");
 
-    if (g_hosts.empty()) {
-        d.setTextColor(0xF800);
-        d.setCursor(6, 40);
-        d.print("no sealed hosts");
-        d.setTextColor(0x8C71);
-        d.setCursor(6, 56);
-        d.print("seal hosts via tools/seal-hosts.py,");
-        d.setCursor(6, 68);
-        d.print("commit, push, then GitOps deploys.");
-        drawFooter("tab home");
-        ui::flush();
-        return;
-    }
+    // Combined list: sealed presets + NVS-saved hosts + "+ new host"
+    auto allCount = (int)g_hosts.size() + (int)g_savedHosts.size() + 1;
+    int  y        = ui::statusbar::HEIGHT + 16;
+    int  rowH     = 13;
+    int  maxRows  = (110 - y) / rowH;
+    int  scrollTop = 0;
+    if (g_selected >= scrollTop + maxRows) scrollTop = g_selected - maxRows + 1;
 
-    int y = ui::statusbar::HEIGHT + 18;
-    for (size_t i = 0; i < g_hosts.size(); i++) {
-        bool sel = (int)i == g_selected;
-        if (sel) d.fillRoundRect(2, y - 1, SCREEN_W - 4, 16, 2, 0x18E3);
+    for (int i = scrollTop; i < allCount && i < scrollTop + maxRows; i++) {
+        bool sel = i == g_selected;
+        if (sel) d.fillRoundRect(2, y - 1, SCREEN_W - 4, rowH, 2, 0x18E3);
 
-        d.setCursor(6, y + 1);
-        d.setTextColor(sel ? 0xFFE0 : 0xFFFF);
-        d.print(g_hosts[i].name);
-
-        d.setCursor(60, y + 1);
-        d.setTextColor(sel ? 0xFFFF : 0x8C71);
         char buf[80];
-        snprintf(buf, sizeof(buf), "%s@%s", g_hosts[i].user, g_hosts[i].host);
-        d.print(buf);
-
-        y += 18;
-        if (y > 110) break;
+        if (i < (int)g_hosts.size()) {
+            const auto& h = g_hosts[i];
+            d.setCursor(6, y + 1);
+            d.setTextColor(sel ? 0xFFE0 : 0xFFFF);
+            d.print(h.name);
+            d.setCursor(60, y + 1);
+            d.setTextColor(sel ? 0xFFFF : 0x8C71);
+            snprintf(buf, sizeof(buf), "%s@%s", h.user, h.host);
+            d.print(buf);
+        } else if (i < (int)(g_hosts.size() + g_savedHosts.size())) {
+            const auto& h = g_savedHosts[i - g_hosts.size()];
+            d.setCursor(6, y + 1);
+            d.setTextColor(sel ? 0xFFE0 : 0x8C71);
+            d.print("•");  // marker for NVS-stored
+            d.setCursor(14, y + 1);
+            d.setTextColor(sel ? 0xFFFF : 0xFFFF);
+            snprintf(buf, sizeof(buf), "%s@%s", h.user, h.host);
+            d.print(buf);
+        } else {
+            d.setCursor(6, y + 1);
+            d.setTextColor(sel ? 0xFFE0 : 0x07FF);
+            d.print("+ new host");
+        }
+        y += rowH;
     }
 
     if (!g_status.empty()) {
@@ -222,6 +290,61 @@ void renderPicker() {
     }
 
     drawFooter(";/ pick   enter connect   tab home");
+    ui::flush();
+}
+
+void renderForm() {
+    auto& d = ui::display();
+    ui::beginFrame();
+    ui::statusbar::draw();
+
+    d.setTextSize(1);
+    d.setTextColor(0xFFFF);
+    d.setCursor(6, ui::statusbar::HEIGHT + 3);
+    d.print("new SSH host");
+
+    int y = ui::statusbar::HEIGHT + 22;
+    struct Row { const char* label; const std::string& v; FormField f; };
+    Row rows[] = {
+        {"host", g_formHost, FormField::Host},
+        {"user", g_formUser, FormField::User},
+    };
+    for (auto& r : rows) {
+        bool sel = (g_formField == r.f);
+        if (sel) d.fillRoundRect(2, y - 1, SCREEN_W - 4, 14, 2, 0x18E3);
+        d.setCursor(6, y + 1);
+        d.setTextColor(sel ? 0xFFE0 : 0x8C71);
+        d.print(r.label);
+        d.setCursor(46, y + 1);
+        d.setTextColor(0xFFFF);
+        d.print(r.v.c_str());
+        if (sel && ((millis() / 500) % 2 == 0)) d.print("_");
+        y += 18;
+    }
+
+    drawFooter(";/  field   enter next/connect");
+    ui::flush();
+}
+
+void renderAskSave() {
+    auto& d = ui::display();
+    ui::beginFrame();
+    ui::statusbar::draw();
+
+    d.setTextSize(1);
+    d.setTextColor(0x07E0);
+    d.setCursor(6, ui::statusbar::HEIGHT + 4);
+    d.print("connected successfully");
+
+    d.setTextColor(0xFFFF);
+    d.setCursor(6, ui::statusbar::HEIGHT + 22);
+    d.printf("%s@%s", g_active.user, g_active.host);
+
+    d.setTextColor(0xFFE0);
+    d.setCursor(6, ui::statusbar::HEIGHT + 50);
+    d.print("save to NVS for quick reconnect?");
+
+    drawFooter("y save   n skip   enter terminal");
     ui::flush();
 }
 
@@ -309,7 +432,9 @@ void renderError() {
 void render() {
     switch (g_stage) {
         case Stage::Picker:     renderPicker();     break;
+        case Stage::Form:       renderForm();       break;
         case Stage::Connecting: renderConnecting(); break;
+        case Stage::AskSave:    renderAskSave();    break;
         case Stage::Connected:  renderTerminal();   break;
         case Stage::Error:      renderError();      break;
     }
@@ -321,7 +446,10 @@ void onEnter() {
     g_stage = Stage::Picker;
     g_status.clear();
     g_hosts = sealed::unsealSshHosts();
-    if (g_selected >= (int)g_hosts.size()) g_selected = 0;
+    loadSavedHosts();
+    int total = (int)g_hosts.size() + (int)g_savedHosts.size() + 1;
+    if (g_selected >= total) g_selected = 0;
+    g_adhocConnected = false;
     g_dirty = true;
 }
 void onExit() { teardown(); g_stage = Stage::Picker; }
@@ -345,6 +473,8 @@ void onTick() {
         if (!startConnection(g_active)) {
             teardown();
             g_stage = Stage::Error;
+        } else if (g_adhocConnected) {
+            g_stage = Stage::AskSave;
         } else {
             g_stage = Stage::Connected;
             pushLine("[connected]");
@@ -362,20 +492,87 @@ void onTick() {
 
 void onKey(char ch) {
     if (g_stage == Stage::Picker) {
-        int n = (int)g_hosts.size();
-        if (ch == key::Up && n > 0) {
-            g_selected = (g_selected - 1 + n) % n;
+        int sealedN = (int)g_hosts.size();
+        int savedN  = (int)g_savedHosts.size();
+        int total   = sealedN + savedN + 1;  // + "new"
+        if (ch == key::Up) {
+            g_selected = (g_selected - 1 + total) % total;
             g_dirty    = true;
-        } else if (ch == key::Down && n > 0) {
-            g_selected = (g_selected + 1) % n;
+        } else if (ch == key::Down) {
+            g_selected = (g_selected + 1) % total;
             g_dirty    = true;
-        } else if (ch == '\n' && n > 0) {
-            g_active = g_hosts[g_selected];
+        } else if (ch == '\n') {
+            if (g_selected < sealedN) {
+                g_active = g_hosts[g_selected];
+                g_adhocConnected = false;
+            } else if (g_selected < sealedN + savedN) {
+                g_active = g_savedHosts[g_selected - sealedN];
+                g_adhocConnected = false;
+            } else {
+                // "+ new host"
+                g_formHost.clear();
+                g_formUser.clear();
+                g_formField = FormField::Host;
+                g_stage = Stage::Form;
+                g_dirty = true;
+                return;
+            }
             g_lines.clear();
             g_status.clear();
-            g_stage  = Stage::Connecting;
-            g_dirty  = true;
+            g_stage = Stage::Connecting;
+            g_dirty = true;
         }
+        return;
+    }
+
+    if (g_stage == Stage::Form) {
+        std::string& field = (g_formField == FormField::Host) ? g_formHost : g_formUser;
+        if (ch == key::Up || ch == key::Down) {
+            g_formField = (g_formField == FormField::Host) ? FormField::User : FormField::Host;
+        } else if (ch == '\n') {
+            if (g_formField == FormField::Host) {
+                g_formField = FormField::User;
+            } else {
+                if (g_formHost.empty() || g_formUser.empty()) {
+                    g_status = "host + user required";
+                    g_dirty  = true;
+                    return;
+                }
+                // Stash as a transient SshHost; pointers live in g_form*.
+                g_active.name = g_formHost.c_str();
+                g_active.host = g_formHost.c_str();
+                g_active.user = g_formUser.c_str();
+                g_active.port = 22;
+                g_adhocConnected = true;
+                g_lines.clear();
+                g_status.clear();
+                g_stage = Stage::Connecting;
+            }
+        } else if (ch == '\b') {
+            if (!field.empty()) field.pop_back();
+        } else if (ch >= 0x20 && ch <= 0x7E) {
+            field.push_back(ch);
+        }
+        g_dirty = true;
+        return;
+    }
+
+    if (g_stage == Stage::AskSave) {
+        if (ch == 'y' || ch == 'Y') {
+            SshHost h;
+            h.host = g_formHost.c_str();
+            h.user = g_formUser.c_str();
+            h.port = 22;
+            saveHost(h);
+            // Refresh saved list so a later picker shows the new entry.
+            // (g_active currently points into g_form* which stay valid.)
+            g_stage = Stage::Connected;
+            pushLine("[connected, saved to NVS]");
+        } else if (ch == 'n' || ch == 'N' || ch == '\n') {
+            g_stage = Stage::Connected;
+            pushLine("[connected]");
+        }
+        g_dirty = true;
         return;
     }
 
