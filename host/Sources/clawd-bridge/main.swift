@@ -11,12 +11,26 @@ let claudeCwd  = ProcessInfo.processInfo.environment["CLAWD_CHAT_CWD"]
     .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
     ?? URL(fileURLWithPath: NSHomeDirectory())
 
-let central = BLECentral(namePrefix: namePrefix)
-let session = ClaudeSession(cwd: claudeCwd)
+let central       = BLECentral(namePrefix: namePrefix)
+let session       = ClaudeSession(cwd: claudeCwd)
+let subscriptions = Subscriptions()
+let tcp: TCPListener? = {
+    do {
+        let t = try TCPListener()
+        t.announce()
+        return t
+    } catch {
+        fputs("[bridge] TCP listener failed: \(error). BLE-only mode.\n", stderr)
+        return nil
+    }
+}()
 
 func send<T: Encodable>(_ value: T) {
     guard let line = Wire.encodeLine(value) else { return }
-    central.send(line)
+    // Fan out to whichever transport currently has a peer. BLE is preferred
+    // for low-latency local use; TCP picks up when WiFi is the only path.
+    if central.isReady       { central.send(line) }
+    if tcp?.isConnected == true { tcp?.send(line) }
 }
 
 session.onChunk  = { chunk in send(Wire.ChatChunk(text: chunk)) }
@@ -25,6 +39,25 @@ session.onEnd    = { tokens in send(Wire.ChatEnd(tokens: tokens)) }
 session.onError  = { msg in
     fputs("[bridge] chat error: \(msg)\n", stderr)
     send(Wire.WireError(where: "chat", msg: msg))
+}
+
+subscriptions.emit = { report in
+    // Re-tag pull-response as a push update.
+    struct UsageUpdate: Encodable {
+        let evt = "usage.update"
+        let today:  UsageReport.Bucket
+        let week:   UsageReport.Bucket
+        let month:  UsageReport.Bucket
+        let cost:   UsageReport.Cost
+        let tokens: UsageReport.Tokens
+        let asOf:   String
+    }
+    send(UsageUpdate(today:  report.today,
+                     week:   report.week,
+                     month:  report.month,
+                     cost:   report.cost,
+                     tokens: report.tokens,
+                     asOf:   report.asOf))
 }
 
 central.onLine = { line in
@@ -38,6 +71,10 @@ central.onLine = { line in
     } else if env.evt == "usage.request" {
         print("→ usage.request")
         Usage.collect { report in send(report) }
+    } else if env.cmd == "subscribe", let ch = env.channel {
+        subscriptions.subscribe(ch)
+    } else if env.cmd == "unsubscribe", let ch = env.channel {
+        subscriptions.unsubscribe(ch)
     } else if env.cmd == "hello" || env.evt == nil && env.cmd == nil {
         // Silent — device-side hello or unrelated frame.
     } else {
@@ -52,6 +89,19 @@ central.onReady = {
 
 central.onDisconnect = {
     fputs("[bridge] device disconnected — rescanning\n", stderr)
+    subscriptions.clearAll()
+}
+
+// Same line handler covers both transports. The router doesn't care which
+// transport delivered the frame.
+let lineRouter = central.onLine!
+tcp?.onLine        = lineRouter
+tcp?.onConnected   = {
+    print("[bridge] TCP peer connected")
+}
+tcp?.onDisconnect  = {
+    print("[bridge] TCP peer disconnected")
+    subscriptions.clearAll()
 }
 
 print("[bridge] starting (looking for \(namePrefix)*)")

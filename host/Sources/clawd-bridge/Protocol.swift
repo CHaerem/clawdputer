@@ -38,6 +38,7 @@ enum Wire {
         let cmd: String?
         let text: String?
         let app: String?
+        let channel: String?
     }
 
     static let encoder = JSONEncoder()

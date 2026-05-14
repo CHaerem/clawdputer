@@ -5,6 +5,7 @@
 
 #include "canvas.h"
 #include "services/ble.h"
+#include "services/bridge.h"
 #include "services/wifi.h"
 
 namespace ui::statusbar {
@@ -55,7 +56,14 @@ void draw() {
     d.setCursor(28, y);
     d.setTextColor(0x8C71);
     d.print("br");
-    drawLinkDot(44, y + 3, ble::isConnected(EventSource::BridgeLink));
+    {
+        // Bridge dot: green for BLE, amber for TCP fallback, grey for off.
+        auto t = bridge::activeTransport();
+        uint16_t color = (t == bridge::Transport::Ble) ? 0x07E0
+                       : (t == bridge::Transport::Tcp) ? 0xFD20
+                       :                                 0x4208;
+        ui::display().fillCircle(44, y + 3, 2, color);
+    }
 
     d.setCursor(52, y);
     d.setTextColor(0x8C71);

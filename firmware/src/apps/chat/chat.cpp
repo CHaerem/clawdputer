@@ -17,6 +17,7 @@
 #include "core/app.h"
 #include "core/event_bus.h"
 #include "services/ble.h"
+#include "services/bridge.h"
 #include "ui/canvas.h"
 #include "ui/statusbar.h"
 
@@ -159,7 +160,7 @@ void render() {
 
 void sendCurrent() {
     if (g_input.empty()) return;
-    if (!ble::isConnected(EventSource::BridgeLink)) {
+    if (!bridge::isConnected()) {
         push("(no bridge connected)", LineKind::ErrorLine);
         return;
     }
@@ -168,7 +169,7 @@ void sendCurrent() {
     doc["text"] = g_input;
     std::string out;
     serializeJson(doc, out);
-    ble::sendLine(EventSource::BridgeLink, out);
+    bridge::sendLine(out);
     push(g_input, LineKind::User);
     g_input.clear();
     g_busy  = true;

@@ -98,6 +98,30 @@ prefer line-aligned splits when output is line-buffered.
 {"evt":"error","where":"chat","msg":"claude exited with status 1"}
 ```
 
+### Subscriptions (push from bridge)
+
+By default the bridge only responds to direct requests. A device can ask
+to receive push events on a named channel:
+
+```json
+// device → bridge
+{"cmd":"subscribe",  "channel":"usage"}
+{"cmd":"unsubscribe","channel":"usage"}
+```
+
+While subscribed, the bridge sends typed events on its own initiative
+when the underlying source changes — for example, when
+`~/.claude/stats-cache.json` is rewritten. Each event uses the same
+payload shape as the corresponding pull response so app code can reuse
+its parser:
+
+| Channel | Event sent              | Trigger                                       |
+|---------|-------------------------|-----------------------------------------------|
+| `usage` | `usage.update`          | `stats-cache.json` is modified (debounced ~2s) |
+
+Unsubscribe (or disconnect) and the bridge stops sending the channel's
+events.
+
 ### Claude usage report
 
 Cardputer asks for a usage summary; bridge responds with figures pulled

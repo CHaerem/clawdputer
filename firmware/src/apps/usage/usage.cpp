@@ -10,6 +10,7 @@
 #include "core/app.h"
 #include "core/event_bus.h"
 #include "services/ble.h"
+#include "services/bridge.h"
 #include "ui/canvas.h"
 #include "ui/statusbar.h"
 
@@ -39,13 +40,13 @@ std::string  g_status;
 constexpr uint32_t REQUEST_TIMEOUT_MS = 30000;
 
 void requestUsage() {
-    if (!ble::isConnected(EventSource::BridgeLink)) {
+    if (!bridge::isConnected()) {
         g_status = "no bridge — start clawd-bridge on Mac";
         g_state  = State::Error;
         g_dirty  = true;
         return;
     }
-    ble::sendLine(EventSource::BridgeLink, "{\"evt\":\"usage.request\"}");
+    bridge::sendLine("{\"evt\":\"usage.request\"}");
     g_state     = State::Waiting;
     g_status    = "loading…";
     g_requestAt = millis();
@@ -59,7 +60,7 @@ void onEvent(const Event& e) {
     JsonDocument doc;
     if (deserializeJson(doc, e.data)) return;
     const char* evt = doc["evt"] | "";
-    if (strcmp(evt, "usage.response") != 0) return;
+    if (strcmp(evt, "usage.response") != 0 && strcmp(evt, "usage.update") != 0) return;
 
     auto today = doc["today"];
     auto week  = doc["week"];
@@ -210,14 +211,19 @@ void render() {
 void onEnter() {
     g_sub = events::subscribe(onEvent);
     if (g_state == State::Idle) g_status.clear();
-    // Auto-request if bridge is already up.
-    if (ble::isConnected(EventSource::BridgeLink)) {
+    // Auto-request if bridge is already up, then subscribe so the bridge
+    // pushes updates whenever stats-cache.json changes.
+    if (bridge::isConnected()) {
         requestUsage();
+        bridge::sendLine("{\"cmd\":\"subscribe\",\"channel\":\"usage\"}");
     }
     g_dirty = true;
 }
 
 void onExit() {
+    if (bridge::isConnected()) {
+        bridge::sendLine("{\"cmd\":\"unsubscribe\",\"channel\":\"usage\"}");
+    }
     events::unsubscribe(g_sub);
     g_sub = 0;
 }

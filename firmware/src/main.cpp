@@ -13,10 +13,13 @@
 #include "core/key.h"
 #include "core/registry.h"
 #include "services/ble.h"
+#include "services/bridge.h"
 #include "services/identity.h"
 #include "services/ota.h"
 #include "services/updater.h"
 #include "services/wifi.h"
+
+extern "C" void clawd_bridge_tick();
 #include "ui/canvas.h"
 
 namespace {
@@ -143,6 +146,7 @@ void setup() {
     identity::begin();
     ble::begin();
     wifi::begin();
+    bridge::begin();
 
     goHome();
     if (!g_active) Serial.println("[clawdputer] no apps registered — idle");
@@ -152,6 +156,7 @@ void loop() {
     M5Cardputer.update();
     ota::tick();
     updater::tick();
+    clawd_bridge_tick();
     if (ota::isUpdating()) {
         delay(5);
         return;
