@@ -1,0 +1,62 @@
+name: wokwi-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/wokwi.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  boot-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        working-directory: firmware
+        run: pio run -e cardputer
+
+      - name: Run Wokwi boot smoke test
+        uses: wokwi/wokwi-ci-action@v1
+        with:
+          token: ${{ secrets.WOKWI_CLI_TOKEN }}
+          path: firmware
+          timeout: 60000
+          scenario: test.scenario.yaml
+          serial_log_file: wokwi-serial.log
+          # Any of these substrings in serial output marks the run failed.
+          fail_text: "Guru Meditation"
+
+      - name: Upload serial log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wokwi-serial-log
+          path: firmware/wokwi-serial.log

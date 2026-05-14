@@ -1,0 +1,11 @@
+# Wokwi simulator config — used by CI to run the firmware against an
+# emulated ESP32-S3 so we catch boot-time panics, stack overflows and
+# missing-symbol failures before publishing a release.
+#
+# Local use: install the wokwi-cli, then:
+#   cd firmware && pio run -e cardputer && wokwi-cli . --scenario test.scenario.yaml
+
+[wokwi]
+version = 1
+firmware = '.pio/build/cardputer/firmware.bin'
+elf      = '.pio/build/cardputer/firmware.elf'

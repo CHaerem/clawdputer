@@ -45,6 +45,21 @@ jobs:
         working-directory: firmware
         run: pio run -e cardputer
 
+      - name: Size guard
+        # Fail the build (so we never publish a release) if the binary
+        # outgrew its OTA partition headroom. partitions:
+        # default_8MB.csv reserves 3 342 336 bytes per app slot; we cap
+        # at 80 % of that so OTA always has room to write the new image
+        # before swapping.
+        run: |
+          SIZE=$(stat -c%s firmware/.pio/build/cardputer/firmware.bin)
+          MAX=2670000
+          printf 'firmware.bin size: %s bytes (limit %s)\n' "$SIZE" "$MAX"
+          if [ "$SIZE" -gt "$MAX" ]; then
+              echo "::error::firmware.bin exceeds OTA-safe size budget"
+              exit 1
+          fi
+
       - name: Stage release artifacts
         id: stage
         run: |

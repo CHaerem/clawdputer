@@ -1,0 +1,11 @@
+name: clawdputer boot smoke test
+version: 1
+author: clawdputer CI
+# Confirms the firmware boots far enough to register apps and enter the
+# launcher without panicking. Anything in the wokwi-ci-action's `fail_text`
+# (Guru Meditation / panic'ed / Backtrace) will fail the run.
+steps:
+  - wait-serial: "[clawdputer] boot"
+  - wait-serial: "app(s) registered"
+  - wait-serial: "[clawdputer] entered app: home"
+  - delay: 3s

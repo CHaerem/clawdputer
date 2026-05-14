@@ -1,0 +1,63 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on installers and scripts
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          find host/install tools -name '*.sh' -print0 | xargs -0 shellcheck -x
+
+  yaml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate workflow YAML
+        run: |
+          sudo apt-get update && sudo apt-get install -y yamllint
+          yamllint -d "{extends: relaxed, rules: {line-length: disable, document-start: disable}}" \
+                   .github/workflows
+
+  cppcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run cppcheck on firmware src
+        run: |
+          sudo apt-get update && sudo apt-get install -y cppcheck
+          cppcheck --quiet --enable=warning,performance,portability \
+                   --inline-suppr --error-exitcode=1 \
+                   --suppress=missingIncludeSystem \
+                   --suppress=unusedFunction \
+                   -I firmware/src \
+                   firmware/src
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Lint + smoke-import the tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff cryptography
+          ruff check tools firmware/scripts
+          # Smoke-import seal-hosts to catch syntax errors / missing imports
+          # without actually encrypting anything.
+          python -c "import importlib.util as u; \
+                     spec = u.spec_from_file_location('seal_hosts','tools/seal-hosts.py'); \
+                     m = u.module_from_spec(spec); spec.loader.exec_module(m); \
+                     print('seal-hosts.py loaded ok')"
