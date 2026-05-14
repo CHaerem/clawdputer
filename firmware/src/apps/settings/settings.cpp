@@ -89,6 +89,16 @@ void actShowSealKey() {
     g_dirty        = true;
 }
 
+bool g_showInstall = false;
+
+void actShowInstall() {
+    g_showInstall  = true;
+    g_showPubkey   = false;
+    g_showSealKey  = false;
+    g_pubkeyScroll = 0;
+    g_dirty        = true;
+}
+
 void rebuild() {
     g_items.clear();
     g_items.push_back({"device",     ble::deviceName(),                                          nullptr});
@@ -112,6 +122,7 @@ void rebuild() {
     g_items.push_back({"ssh pubkey fp", identity::fingerprint().empty() ? std::string("—") : identity::fingerprint(), nullptr});
     g_items.push_back({"show SSH pubkey",  "",                                                  actShowPubkey});
     g_items.push_back({"show seal key",    "",                                                  actShowSealKey});
+    g_items.push_back({"bridge install cmd","",                                                  actShowInstall});
     g_items.push_back({"configure WiFi",    "",                                                  actConfigureWifi});
     g_items.push_back({"check for updates", "",                                                  actCheckUpdate});
     g_items.push_back({"clear WiFi creds",  "",                                                  actClearWifi});
@@ -185,6 +196,14 @@ void render() {
     if (g_showSealKey) {
         renderScrollable("seal key (export CLAWD_SEAL_KEY)", 0xFFE0,
                          identity::sealKeyBase64(), 0xFFE0);
+        return;
+    }
+    if (g_showInstall) {
+        renderScrollable("run on any Mac to install bridge", 0xFFFF,
+                         std::string("curl -fsSL https://github.com/")
+                            + "CHaerem/clawdputer/raw/main/host/install/online.sh"
+                            + " | bash",
+                         0x07E0);
         return;
     }
     auto& d = ui::display();
@@ -261,10 +280,10 @@ void onTick() {
 }
 
 void onKey(char ch) {
-    if (g_showPubkey || g_showSealKey) {
+    if (g_showPubkey || g_showSealKey || g_showInstall) {
         if (ch == key::Up && g_pubkeyScroll > 0) { g_pubkeyScroll--; g_dirty = true; }
         else if (ch == key::Down) { g_pubkeyScroll++; g_dirty = true; }
-        else if (ch == '\n')      { g_showPubkey = false; g_showSealKey = false; g_dirty = true; }
+        else if (ch == '\n')      { g_showPubkey = false; g_showSealKey = false; g_showInstall = false; g_dirty = true; }
         return;
     }
     if (ch == key::Up) {

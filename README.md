@@ -65,11 +65,19 @@ speaker, microSD, 1750 mAh battery.
 cd firmware
 pio run -e cardputer -t upload      # USB flash (one time)
 
-# Bridge
+# Bridge (this machine — uses your local source)
 cd host
 swift build
 host/install/install.sh             # install as launchd agent
+
+# Bridge (any other Mac — pulls latest pre-built binary from GitHub)
+curl -fsSL https://github.com/CHaerem/clawdputer/raw/main/host/install/online.sh | bash
 ```
+
+The one-line installer is the same one the Cardputer shows under
+**Settings → "bridge install cmd"** — so when you pick up a new Mac, you
+can read the command off the device screen.
+
 
 After first flash:
 

@@ -7,6 +7,22 @@ processes and the host context.
 
 See [`protocol/WIRE.md`](../protocol/WIRE.md) for the wire protocol.
 
+## Install on any Mac (one line)
+
+The fastest path on a fresh machine — no clone, no swift toolchain:
+
+```bash
+curl -fsSL https://github.com/CHaerem/clawdputer/raw/main/host/install/online.sh | bash
+```
+
+It downloads the latest pre-built bridge binary (built by CI for
+arm64+x86_64), drops it under `~/Library/Application Support/clawd-bridge/`,
+and registers it as a per-user launchd agent. Re-run the same line to
+update.
+
+Cardputer also displays this exact command on demand — open Settings →
+"bridge install cmd" → read it off the screen.
+
 ## Status
 
 Connects to the Cardputer over BLE (clawd-bridge service), and bridges the

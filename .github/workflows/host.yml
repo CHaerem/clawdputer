@@ -1,0 +1,57 @@
+name: host
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "host/**"
+      - ".github/workflows/host.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: host-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build (release)
+        working-directory: host
+        run: swift build -c release --arch arm64 --arch x86_64
+
+      - name: Stage artifact
+        id: stage
+        run: |
+          SHA=$(git rev-parse --short=7 HEAD)
+          mkdir -p out
+          cp host/.build/apple/Products/Release/clawd-bridge out/clawd-bridge
+          shasum -a 256 out/clawd-bridge | awk '{print $1}' > out/clawd-bridge.sha256
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          file out/clawd-bridge
+          ls -lh out
+
+      - name: Publish "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Latest build (${{ steps.stage.outputs.sha }})"
+          body: |
+            Auto-built from commit ${{ github.sha }}.
+
+            Bridge installer for any Mac:
+            ```
+            curl -fsSL https://github.com/CHaerem/clawdputer/raw/main/host/install/online.sh | bash
+            ```
+          files: |
+            out/clawd-bridge
+            out/clawd-bridge.sha256
+          fail_on_unmatched_files: true
+          make_latest: "true"
