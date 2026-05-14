@@ -11,6 +11,7 @@
 #include "core/app.h"
 #include "core/key.h"
 #include "services/ble.h"
+#include "services/identity.h"
 #include "services/updater.h"
 #include "services/wifi.h"
 #include "ui/canvas.h"
@@ -61,6 +62,24 @@ void actClearWifi() {
     toast("WiFi cleared (reboot to apply)");
 }
 
+bool g_showPubkey = false;
+bool g_showSealKey = false;
+int  g_pubkeyScroll = 0;
+
+void actShowPubkey() {
+    g_showPubkey   = true;
+    g_showSealKey  = false;
+    g_pubkeyScroll = 0;
+    g_dirty        = true;
+}
+
+void actShowSealKey() {
+    g_showSealKey  = true;
+    g_showPubkey   = false;
+    g_pubkeyScroll = 0;
+    g_dirty        = true;
+}
+
 void rebuild() {
     g_items.clear();
     g_items.push_back({"device",     ble::deviceName(),                                          nullptr});
@@ -81,6 +100,9 @@ void rebuild() {
 #else
     g_items.push_back({"ota password", "(unset)",                                                nullptr});
 #endif
+    g_items.push_back({"ssh pubkey fp", identity::fingerprint().empty() ? std::string("—") : identity::fingerprint(), nullptr});
+    g_items.push_back({"show SSH pubkey",  "",                                                  actShowPubkey});
+    g_items.push_back({"show seal key",    "",                                                  actShowSealKey});
     g_items.push_back({"check for updates", "",                                                  actCheckUpdate});
     g_items.push_back({"clear WiFi creds",  "",                                                  actClearWifi});
     g_items.push_back({"clear BLE bonds",   "",                                                  actClearBonds});
@@ -108,7 +130,53 @@ void moveSelection(int dir) {
     g_dirty    = true;
 }
 
+void renderScrollable(const char* title, uint16_t titleColor,
+                      const std::string& body, uint16_t bodyColor) {
+    auto& d = ui::display();
+    ui::beginFrame();
+    ui::statusbar::draw();
+
+    d.setTextSize(1);
+    d.setTextColor(titleColor);
+    d.setCursor(6, ui::statusbar::HEIGHT + 3);
+    d.print(title);
+
+    int y = ui::statusbar::HEIGHT + 16;
+    int maxChars = 38;
+    int lineH = 9;
+    int linesShown = 0;
+    int maxLines = (124 - y) / lineH;
+    int line = 0;
+    d.setTextColor(bodyColor);
+    for (size_t i = 0; i < body.size(); i += maxChars) {
+        if (line >= g_pubkeyScroll && linesShown < maxLines) {
+            std::string chunk = body.substr(i, maxChars);
+            d.setCursor(4, y + linesShown * lineH);
+            d.print(chunk.c_str());
+            linesShown++;
+        }
+        line++;
+    }
+
+    d.fillRect(0, 124, SCREEN_W, 11, 0x1082);
+    d.drawFastHLine(0, 124, SCREEN_W, 0x2945);
+    d.setTextColor(0x8C71);
+    d.setCursor(4, 127);
+    d.print(";/  scroll   enter back");
+    ui::flush();
+}
+
 void render() {
+    if (g_showPubkey) {
+        renderScrollable("SSH pubkey (paste to authorized_keys)", 0xFFFF,
+                         identity::publicKeyOpenSsh(), 0x07E0);
+        return;
+    }
+    if (g_showSealKey) {
+        renderScrollable("seal key (export CLAWD_SEAL_KEY)", 0xFFE0,
+                         identity::sealKeyBase64(), 0xFFE0);
+        return;
+    }
     auto& d = ui::display();
     ui::beginFrame();
     ui::statusbar::draw();
@@ -183,6 +251,12 @@ void onTick() {
 }
 
 void onKey(char ch) {
+    if (g_showPubkey || g_showSealKey) {
+        if (ch == key::Up && g_pubkeyScroll > 0) { g_pubkeyScroll--; g_dirty = true; }
+        else if (ch == key::Down) { g_pubkeyScroll++; g_dirty = true; }
+        else if (ch == '\n')      { g_showPubkey = false; g_showSealKey = false; g_dirty = true; }
+        return;
+    }
     if (ch == key::Up) {
         moveSelection(-1);
     } else if (ch == key::Down) {

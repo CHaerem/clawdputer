@@ -6,6 +6,11 @@
 # Per-device secrets (WiFi credentials, OTA password)
 firmware/src/wifi_secrets.h
 
+# Sealed-secrets workflow: plaintext input stays local; only the encrypted
+# .sealed file under firmware/secrets/ is committed.
+tools/hosts.json
+firmware/src/secrets/sealed_blobs.h
+
 # Swift Package Manager
 .build/
 .swiftpm/

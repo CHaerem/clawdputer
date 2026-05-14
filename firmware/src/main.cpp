@@ -13,6 +13,7 @@
 #include "core/key.h"
 #include "core/registry.h"
 #include "services/ble.h"
+#include "services/identity.h"
 #include "services/ota.h"
 #include "services/updater.h"
 #include "services/wifi.h"
