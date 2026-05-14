@@ -19,9 +19,10 @@ func send<T: Encodable>(_ value: T) {
     central.send(line)
 }
 
-session.onChunk = { chunk in send(Wire.ChatChunk(text: chunk)) }
-session.onEnd   = { tokens in send(Wire.ChatEnd(tokens: tokens)) }
-session.onError = { msg in
+session.onChunk  = { chunk in send(Wire.ChatChunk(text: chunk)) }
+session.onStatus = { text  in send(Wire.ChatStatus(text: text)) }
+session.onEnd    = { tokens in send(Wire.ChatEnd(tokens: tokens)) }
+session.onError  = { msg in
     fputs("[bridge] chat error: \(msg)\n", stderr)
     send(Wire.WireError(where: "chat", msg: msg))
 }

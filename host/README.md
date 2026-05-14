@@ -49,11 +49,21 @@ CLAWD_CHAT_CWD=~/Projects/some-repo .build/debug/clawd-bridge
 The `claude` CLI runs in that directory, so it picks up the right repo
 context and any `CLAUDE.md` files at the root.
 
+## Auto-start at login
+
+```bash
+CLAWD_CHAT_CWD=~/Projects/some-repo host/install/install.sh
+host/install/uninstall.sh                # remove
+```
+
+The script builds a release binary, writes
+`~/Library/LaunchAgents/com.clawdputer.bridge.plist` with absolute paths,
+and loads it via `launchctl`. Logs end up in
+`~/Library/Logs/clawd-bridge/`.
+
 ## Plans (in order)
 
-1. `launchd` plist so the daemon starts at login and reconnects across
-   reboots.
-2. Multi-session: more than one `claude` process behind named sessions
+1. Multi-session: more than one `claude` process behind named sessions
    the Cardputer can switch between.
-3. Status feedback to the device while a turn is streaming (token
-   counter, elapsed time) so the chat UI feels alive.
+2. Tool-use status feedback (currently only the tool name is forwarded
+   when a tool block starts — could include the args / summary too).

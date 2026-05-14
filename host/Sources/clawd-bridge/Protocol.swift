@@ -16,6 +16,11 @@ enum Wire {
         let text: String
     }
 
+    struct ChatStatus: Encodable {
+        let evt: String = "chat.status"
+        let text: String
+    }
+
     struct ChatEnd: Encodable {
         let evt: String   = "chat.end"
         let tokens: Int?

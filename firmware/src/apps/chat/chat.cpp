@@ -2,12 +2,14 @@
 // the BLE bridge link, and renders streamed responses from the host's
 // `claude` CLI session.
 //
-// Wire protocol: see protocol/WIRE.md (chat.send / chat.chunk / chat.end).
+// Wire protocol: see protocol/WIRE.md (chat.send / chat.chunk / chat.status
+// / chat.end).
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <M5Cardputer.h>
 
+#include <algorithm>
 #include <deque>
 #include <string>
 #include <vector>
@@ -18,9 +20,11 @@
 
 namespace {
 
+enum class LineKind : uint8_t { User, Assistant, Status, ErrorLine };
+
 struct Line {
     std::string text;
-    bool        fromUser;
+    LineKind    kind;
 };
 
 std::deque<Line> g_lines;
@@ -35,20 +39,64 @@ constexpr int    MAX_W     = 52;   // chars per line at text size 1 on 320px
 constexpr int    TOP_Y     = 16;
 constexpr int    INPUT_H   = 16;
 
-void push(const std::string& s, bool fromUser) {
-    g_lines.push_back({s, fromUser});
+uint16_t colorFor(LineKind k) {
+    switch (k) {
+        case LineKind::User:      return 0x07E0;  // green
+        case LineKind::Assistant: return 0xFFFF;  // white
+        case LineKind::Status:    return 0x7BEF;  // dim grey
+        case LineKind::ErrorLine: return 0xF800;  // red
+    }
+    return 0xFFFF;
+}
+
+void push(const std::string& s, LineKind kind) {
+    g_lines.push_back({s, kind});
     while (g_lines.size() > MAX_LINES) g_lines.pop_front();
     g_dirty = true;
 }
 
 void appendAssistant(const std::string& chunk) {
-    if (g_lines.empty() || g_lines.back().fromUser) {
-        g_lines.push_back({chunk, false});
+    if (g_lines.empty() || g_lines.back().kind != LineKind::Assistant) {
+        g_lines.push_back({chunk, LineKind::Assistant});
     } else {
         g_lines.back().text += chunk;
     }
     while (g_lines.size() > MAX_LINES) g_lines.pop_front();
     g_dirty = true;
+}
+
+// Word-aware wrap: break on the latest space ≤ maxW; honour explicit '\n'.
+std::vector<std::string> wrap(const std::string& s, size_t maxW) {
+    std::vector<std::string> out;
+    auto flushSegment = [&](const std::string& seg) {
+        if (seg.empty()) {
+            out.push_back("");
+            return;
+        }
+        size_t i = 0;
+        while (i < seg.size()) {
+            size_t end = std::min(i + maxW, seg.size());
+            if (end < seg.size()) {
+                size_t spc = seg.rfind(' ', end);
+                if (spc != std::string::npos && spc > i) end = spc;
+            }
+            out.push_back(seg.substr(i, end - i));
+            i = end;
+            while (i < seg.size() && seg[i] == ' ') i++;
+        }
+    };
+    std::string current;
+    for (char c : s) {
+        if (c == '\r') continue;
+        if (c == '\n') {
+            flushSegment(current);
+            current.clear();
+        } else {
+            current.push_back(c);
+        }
+    }
+    flushSegment(current);
+    return out;
 }
 
 void render() {
@@ -70,25 +118,17 @@ void render() {
 
     const int bottomY = 240 - INPUT_H;
 
-    // Walk history newest-first, collect wrapped rows bottom-up.
+    // Walk history newest-first, collect wrapped rows bottom-up until full.
     struct Row {
         std::string text;
-        bool        fromUser;
+        LineKind    kind;
     };
     std::vector<Row> rows;
     int              rowsLeft = (bottomY - TOP_Y) / LINE_H;
     for (auto it = g_lines.rbegin(); it != g_lines.rend() && rowsLeft > 0; ++it) {
-        const std::string& s = it->text;
-        std::vector<std::string> parts;
-        if (s.empty()) {
-            parts.push_back("");
-        } else {
-            for (size_t i = 0; i < s.size(); i += MAX_W) {
-                parts.push_back(s.substr(i, MAX_W));
-            }
-        }
-        for (auto rit = parts.rbegin(); rit != parts.rend() && rowsLeft > 0; ++rit) {
-            rows.push_back({*rit, it->fromUser});
+        auto wrapped = wrap(it->text, MAX_W);
+        for (auto rit = wrapped.rbegin(); rit != wrapped.rend() && rowsLeft > 0; ++rit) {
+            rows.push_back({*rit, it->kind});
             rowsLeft--;
         }
     }
@@ -96,7 +136,7 @@ void render() {
     int yLine = bottomY - LINE_H;
     for (auto& r : rows) {
         d.setCursor(2, yLine);
-        d.setTextColor(r.fromUser ? 0x07E0 : WHITE);
+        d.setTextColor(colorFor(r.kind));
         d.print(r.text.c_str());
         yLine -= LINE_H;
     }
@@ -108,12 +148,15 @@ void render() {
     std::string in = g_input;
     if (in.size() > 50) in = std::string("…") + in.substr(in.size() - 49);
     d.print(in.c_str());
+    if ((millis() / 500) % 2 == 0) {
+        d.print("_");
+    }
 }
 
 void sendCurrent() {
     if (g_input.empty()) return;
     if (!ble::isConnected(EventSource::BridgeLink)) {
-        push("(no bridge connected)", false);
+        push("(no bridge connected)", LineKind::ErrorLine);
         return;
     }
     JsonDocument doc;
@@ -122,7 +165,7 @@ void sendCurrent() {
     std::string out;
     serializeJson(doc, out);
     ble::sendLine(EventSource::BridgeLink, out);
-    push(g_input, true);
+    push(g_input, LineKind::User);
     g_input.clear();
     g_busy  = true;
     g_dirty = true;
@@ -141,11 +184,19 @@ void onEvent(const Event& e) {
             const char* evt = doc["evt"] | "";
             if (strcmp(evt, "chat.chunk") == 0) {
                 appendAssistant(doc["text"] | "");
+            } else if (strcmp(evt, "chat.status") == 0) {
+                push(doc["text"] | "", LineKind::Status);
             } else if (strcmp(evt, "chat.end") == 0) {
+                if (!doc["tokens"].isNull()) {
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "[%u tokens]",
+                             (unsigned)(doc["tokens"] | 0));
+                    push(buf, LineKind::Status);
+                }
                 g_busy  = false;
                 g_dirty = true;
             } else if (strcmp(evt, "error") == 0) {
-                push(std::string("[err] ") + (doc["msg"] | ""), false);
+                push(std::string("[err] ") + (doc["msg"] | ""), LineKind::ErrorLine);
             }
             break;
         }
@@ -162,7 +213,15 @@ void onExit() {
     g_sub = 0;
 }
 
-void onTick() {}
+void onTick() {
+    // Repaint twice a second so the cursor blinks.
+    static uint32_t lastBlink = 0;
+    uint32_t now = millis();
+    if (now - lastBlink >= 500) {
+        lastBlink = now;
+        g_dirty   = true;
+    }
+}
 
 void onKey(char ch) {
     if (ch == '\n') {

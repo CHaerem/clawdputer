@@ -17,11 +17,13 @@ final class ClaudeSession {
 
     let cwd: URL
 
-    var onChunk: ((String) -> Void)?
-    var onEnd:   ((Int?) -> Void)?
-    var onError: ((String) -> Void)?
+    var onChunk:  ((String) -> Void)?
+    var onStatus: ((String) -> Void)?
+    var onEnd:    ((Int?) -> Void)?
+    var onError:  ((String) -> Void)?
 
-    private var stderrBuf = Data()
+    private var stderrBuf    = Data()
+    private var pendingTokens: Int? = nil
 
     init(cwd: URL = URL(fileURLWithPath: NSHomeDirectory())) {
         self.cwd = cwd
@@ -34,13 +36,24 @@ final class ClaudeSession {
         }
         status = .busy
         stderrBuf.removeAll()
+        pendingTokens = nil
 
-        let process    = Process()
-        process.executableURL          = URL(fileURLWithPath: "/usr/bin/env")
-        var args: [String]             = ["claude", "--print"]
+        let parser = StreamJsonParser()
+        parser.onText   = { [weak self] text in self?.onChunk?(text) }
+        parser.onTool   = { [weak self] name in self?.onStatus?("⚙ \(name)") }
+        parser.onResult = { [weak self] tokens in self?.pendingTokens = tokens }
+
+        let process = Process()
+        process.executableURL       = URL(fileURLWithPath: "/usr/bin/env")
+        var args: [String]          = [
+            "claude", "-p",
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+        ]
         if hasSession { args.append("--continue") }
-        process.arguments              = args
-        process.currentDirectoryURL    = cwd
+        process.arguments           = args
+        process.currentDirectoryURL = cwd
 
         let stdin  = Pipe()
         let stdout = Pipe()
@@ -49,12 +62,10 @@ final class ClaudeSession {
         process.standardOutput = stdout
         process.standardError  = stderr
 
-        stdout.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        stdout.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            if let s = String(data: data, encoding: .utf8) {
-                DispatchQueue.main.async { self?.onChunk?(s) }
-            }
+            DispatchQueue.main.async { parser.feed(data) }
         }
         stderr.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -70,13 +81,13 @@ final class ClaudeSession {
                 self.status = .idle
                 if proc.terminationStatus == 0 {
                     self.hasSession = true
-                    self.onEnd?(nil)
+                    self.onEnd?(self.pendingTokens)
                 } else {
                     let msg = String(data: self.stderrBuf, encoding: .utf8)?
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                         ?? "claude exited \(proc.terminationStatus)"
                     self.onError?(msg.isEmpty ? "claude exited \(proc.terminationStatus)" : msg)
-                    self.onEnd?(nil)
+                    self.onEnd?(self.pendingTokens)
                 }
             }
         }
