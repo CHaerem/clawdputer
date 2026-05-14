@@ -13,6 +13,7 @@
 #include "core/registry.h"
 #include "services/ble.h"
 #include "services/identity.h"
+#include "services/settings.h"
 #include "services/updater.h"
 #include "services/wifi.h"
 #include "ui/canvas.h"
@@ -71,6 +72,24 @@ void actConfigureWifi() {
     else toast("wifi app not registered");
 }
 
+void actToggleAudio() {
+    bool v = !settings::audioEnabled();
+    settings::setAudioEnabled(v);
+    toast(v ? "audio: on" : "audio: off");
+}
+
+void actTogglePet() {
+    bool v = !settings::petEnabled();
+    settings::setPetEnabled(v);
+    toast(v ? "pet: on" : "pet: off");
+}
+
+void actToggleShake() {
+    bool v = !settings::shakeEnabled();
+    settings::setShakeEnabled(v);
+    toast(v ? "shake: on" : "shake: off");
+}
+
 bool g_showPubkey = false;
 bool g_showSealKey = false;
 int  g_pubkeyScroll = 0;
@@ -123,6 +142,9 @@ void rebuild() {
     g_items.push_back({"show SSH pubkey",  "",                                                  actShowPubkey});
     g_items.push_back({"show seal key",    "",                                                  actShowSealKey});
     g_items.push_back({"bridge install cmd","",                                                  actShowInstall});
+    g_items.push_back({"audio",             settings::audioEnabled() ? std::string("on") : std::string("off"), actToggleAudio});
+    g_items.push_back({"pet face",          settings::petEnabled()   ? std::string("on") : std::string("off"), actTogglePet});
+    g_items.push_back({"shake → dizzy",     settings::shakeEnabled() ? std::string("on") : std::string("off"), actToggleShake});
     g_items.push_back({"configure WiFi",    "",                                                  actConfigureWifi});
     g_items.push_back({"check for updates", "",                                                  actCheckUpdate});
     g_items.push_back({"clear WiFi creds",  "",                                                  actClearWifi});

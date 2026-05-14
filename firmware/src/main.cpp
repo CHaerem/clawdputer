@@ -12,11 +12,14 @@
 #include "core/app.h"
 #include "core/key.h"
 #include "core/registry.h"
+#include "services/audio.h"
 #include "services/ble.h"
 #include "services/bridge.h"
 #include "services/identity.h"
+#include "services/imu.h"
 #include "services/ota.h"
 #include "services/power.h"
+#include "services/settings.h"
 #include "services/updater.h"
 #include "services/wifi.h"
 
@@ -148,6 +151,9 @@ void setup() {
     (void)ui::display();
 
     power::begin();
+    settings::begin();
+    audio::begin();
+    imu::begin();
     updater::begin();
     identity::begin();
     ble::begin();
@@ -174,6 +180,7 @@ void loop() {
     }
     dispatchSideButton();
     dispatchKeys();
+    imu::tick();
     if (g_active && g_active->onTick) g_active->onTick();
     if (g_active && g_active->onDraw) g_active->onDraw();
     power::tick();

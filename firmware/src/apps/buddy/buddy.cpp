@@ -11,7 +11,10 @@
 
 #include "core/app.h"
 #include "core/event_bus.h"
+#include "services/audio.h"
 #include "services/ble.h"
+#include "services/imu.h"
+#include "services/settings.h"
 #include "ui/canvas.h"
 #include "ui/statusbar.h"
 
@@ -29,10 +32,65 @@ uint32_t g_approvals = 0, g_denials = 0;
 bool     g_screenDirty = true;
 int      g_sub         = 0;
 
+enum class PetState : uint8_t {
+    Sleep, Idle, Busy, Attention, Celebrate, Dizzy, Heart
+};
+PetState g_pet            = PetState::Sleep;
+PetState g_petLast        = PetState::Sleep;
+uint32_t g_petStateUntil  = 0;
+uint32_t g_lastTokensSeen = 0;
+uint32_t g_levelTokens    = 0;   // next celebration milestone
+bool     g_promptShown    = false;
+uint32_t g_promptAt       = 0;
+bool     g_attentionPinged = false;
+
+constexpr uint32_t CELEBRATE_STEP_TOKENS = 50000;
+
+const char* petFace(PetState s) {
+    switch (s) {
+        case PetState::Sleep:     return "(-.-) zzz";
+        case PetState::Idle:      return "(o.o)";
+        case PetState::Busy:      return "(>_<)";
+        case PetState::Attention: return "(O_O)!";
+        case PetState::Celebrate: return "\\(^o^)/";
+        case PetState::Dizzy:     return "(@_@)";
+        case PetState::Heart:     return "(<3_<3)";
+    }
+    return "(o.o)";
+}
+
+uint16_t petColor(PetState s) {
+    switch (s) {
+        case PetState::Sleep:     return 0x7BEF;
+        case PetState::Idle:      return 0xFFFF;
+        case PetState::Busy:      return 0xFFE0;
+        case PetState::Attention: return 0xF800;
+        case PetState::Celebrate: return 0x07E0;
+        case PetState::Dizzy:     return 0xFD20;
+        case PetState::Heart:     return 0xF81F;
+    }
+    return 0xFFFF;
+}
+
+void drawPet() {
+    if (!settings::petEnabled()) return;
+    auto& d = ui::display();
+    d.setTextSize(2);
+    d.setTextColor(petColor(g_pet));
+    int x = SCREEN_W - 88;
+    int y = ui::statusbar::HEIGHT + 4;
+    // Tiny "breath" wobble: jiggle x by 1 px on alternating half-seconds
+    // when idle, so it doesn't feel frozen.
+    if (g_pet == PetState::Idle && ((millis() / 500) % 2 == 0)) x += 1;
+    d.setCursor(x, y);
+    d.print(petFace(g_pet));
+}
+
 void render() {
     auto& d = ui::display();
     ui::beginFrame();
     ui::statusbar::draw();
+    drawPet();
 
     int y = ui::statusbar::HEIGHT + 4;
 
@@ -237,6 +295,42 @@ void onExit() {
     g_sub = 0;
 }
 
+void updatePetState() {
+    uint32_t now = millis();
+
+    // Transient states (celebrate / dizzy / heart) keep priority until they
+    // expire.
+    if (g_petStateUntil && now < g_petStateUntil) {
+        if (g_pet != g_petLast) {
+            g_petLast = g_pet;
+            g_screenDirty = true;
+        }
+        return;
+    }
+    g_petStateUntil = 0;
+
+    if (settings::shakeEnabled() && imu::consumeShake()) {
+        g_pet           = PetState::Dizzy;
+        g_petStateUntil = now + 2000;
+        g_petLast       = g_pet;
+        g_screenDirty   = true;
+        return;
+    }
+
+    PetState next;
+    bool connected = ble::isConnected(EventSource::NusLink);
+    if (!connected)                    next = PetState::Sleep;
+    else if (g_promptId.length() > 0)  next = PetState::Attention;
+    else if (g_running > 0)            next = PetState::Busy;
+    else                               next = PetState::Idle;
+
+    if (next != g_pet) {
+        g_pet         = next;
+        g_petLast     = next;
+        g_screenDirty = true;
+    }
+}
+
 void onTick() {
     if (ble::isConnected(EventSource::NusLink) && g_lastHeartbeatMs &&
         (millis() - g_lastHeartbeatMs > 30000)) {
@@ -244,23 +338,49 @@ void onTick() {
         g_screenDirty     = true;
         g_lastHeartbeatMs = 0;
     }
+
+    // Token-celebration: every 50K of cumulative tokens_today, fire celebrate.
+    if (g_tokensToday >= g_levelTokens + CELEBRATE_STEP_TOKENS) {
+        g_levelTokens   = (g_tokensToday / CELEBRATE_STEP_TOKENS) * CELEBRATE_STEP_TOKENS;
+        g_pet           = PetState::Celebrate;
+        g_petStateUntil = millis() + 3000;
+        audio::play(audio::Cue::Celebrate);
+        g_screenDirty   = true;
+    }
+
+    // Attention chime: ping once when a new prompt arrives.
+    if (g_promptId.length() > 0 && !g_attentionPinged) {
+        audio::play(audio::Cue::Attention);
+        g_attentionPinged = true;
+        g_promptAt        = millis();
+    }
+    if (g_promptId.length() == 0) g_attentionPinged = false;
+
+    updatePetState();
 }
 
 void onKey(char ch) {
     if (g_promptId.length() == 0) return;
-    if (ch == 'y' || ch == 'Y') {
+    bool fast = (millis() - g_promptAt) < 5000;
+    if (ch == '\n' || ch == 'y' || ch == 'Y') {
         sendPermission(g_promptId, "once");
         g_approvals++;
         g_promptId = "";
         g_promptTool = "";
         g_promptHint = "";
+        audio::play(audio::Cue::Approve);
+        if (fast) {
+            g_pet           = PetState::Heart;
+            g_petStateUntil = millis() + 2500;
+        }
         g_screenDirty = true;
-    } else if (ch == 'n' || ch == 'N') {
+    } else if (ch == 0x1B /*ESC*/ || ch == 'n' || ch == 'N' || ch == '\b') {
         sendPermission(g_promptId, "deny");
         g_denials++;
         g_promptId = "";
         g_promptTool = "";
         g_promptHint = "";
+        audio::play(audio::Cue::Deny);
         g_screenDirty = true;
     }
 }
