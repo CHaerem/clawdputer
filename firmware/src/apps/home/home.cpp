@@ -1,9 +1,6 @@
-// Home — grid launcher. Arrow keys move between tiles, Enter launches.
-// Tab from any other app brings the user back here.
-//
-// Cardputer's `;./,/` keys (printed with arrow glyphs) work as arrows here
-// without holding Fn, because home is declared as keysAsArrows=true. The
-// global dispatcher applies the alias; this app just consumes key::Up/etc.
+// Home — coverflow launcher. One large card sits center-screen showing the
+// selected app, with smaller peek cards on either side hinting at the next
+// and previous apps. Left/right rotates, enter launches.
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
@@ -25,17 +22,15 @@ std::vector<const App*> g_tiles;
 int  g_selected = 0;
 bool g_dirty    = true;
 
-// Layout chosen for the typical small handful of apps. The grid adapts
-// between 2 and 3 columns based on count so we don't end up with a half-
-// empty row, and the tiles size themselves to fill the viewport.
-constexpr int GRID_TOP    = ui::statusbar::HEIGHT + 6;
-constexpr int GRID_BOTTOM = 224;
-constexpr int MARGIN_X    = 6;
-constexpr int GAP         = 6;
-
-int g_cols   = 2;
-int g_tileW  = 150;
-int g_tileH  = 92;
+constexpr int CARD_W       = 180;
+constexpr int CARD_H       = 150;
+constexpr int CARD_X       = (320 - CARD_W) / 2;
+constexpr int CARD_Y       = ui::statusbar::HEIGHT + 8;
+constexpr int PEEK_W       = 40;
+constexpr int PEEK_H       = 110;
+constexpr int LEFT_PEEK_X  = 6;
+constexpr int RIGHT_PEEK_X = 320 - PEEK_W - 6;
+constexpr int PEEK_Y       = CARD_Y + (CARD_H - PEEK_H) / 2;
 
 void rebuildList() {
     g_tiles.clear();
@@ -45,20 +40,9 @@ void rebuildList() {
         g_tiles.push_back(a);
     }
     if (g_selected >= (int)g_tiles.size()) g_selected = 0;
-
-    int n = (int)g_tiles.size();
-    g_cols = (n <= 4) ? 2 : 3;
-    int rows = (n + g_cols - 1) / g_cols;
-    if (rows < 1) rows = 1;
-
-    int availW = 320 - 2 * MARGIN_X - (g_cols - 1) * GAP;
-    int availH = GRID_BOTTOM - GRID_TOP - (rows - 1) * GAP;
-    g_tileW = availW / g_cols;
-    g_tileH = availH / rows;
-    if (g_tileH > 92) g_tileH = 92;  // cap so 1-row layouts don't get gigantic
 }
 
-uint16_t tileColor(const App* a) {
+uint16_t tileBg(const App* a) {
     if (!a || !a->id) return 0x18E3;
     if (!strcmp(a->id, "buddy"))    return 0x328A;
     if (!strcmp(a->id, "chat"))     return 0x2986;
@@ -76,45 +60,92 @@ uint16_t tileAccent(const App* a) {
     return 0xFFFF;
 }
 
-void drawTile(int col, int row, const App* a, bool selected) {
-    int x = MARGIN_X + col * (g_tileW + GAP);
-    int y = GRID_TOP + row * (g_tileH + GAP);
+void drawWrapped(const std::string& s, int x, int y, int maxChars, uint16_t color) {
+    auto& d = ui::display();
+    d.setTextColor(color);
+
+    size_t i = 0;
+    int    line = 0;
+    while (i < s.size() && line < 3) {
+        size_t end = i + maxChars;
+        if (end >= s.size()) end = s.size();
+        else {
+            size_t sp = s.rfind(' ', end);
+            if (sp != std::string::npos && sp > i) end = sp;
+        }
+        d.setCursor(x, y + line * 12);
+        d.print(s.substr(i, end - i).c_str());
+        i = end;
+        while (i < s.size() && s[i] == ' ') i++;
+        line++;
+    }
+}
+
+void drawPeek(int x, const App* a) {
+    if (!a) return;
     auto& d = ui::display();
 
-    uint16_t bg     = tileColor(a);
-    uint16_t accent = tileAccent(a);
-    if (selected) {
-        d.fillRoundRect(x - 2, y - 2, g_tileW + 4, g_tileH + 4, 6, accent);
-    }
-    d.fillRoundRect(x, y, g_tileW, g_tileH, 5, bg);
+    d.fillRoundRect(x, PEEK_Y, PEEK_W, PEEK_H, 5, tileBg(a));
 
-    d.setTextSize(2);
+    d.setTextSize(3);
+    d.setTextColor(tileAccent(a));
+    d.setCursor(x + (PEEK_W - 18) / 2, PEEK_Y + 24);
+    char glyph = a->name[0];
+    d.print(glyph);
+}
+
+void drawCard(const App* a) {
+    if (!a) return;
+    auto& d = ui::display();
+
+    uint16_t bg     = tileBg(a);
+    uint16_t accent = tileAccent(a);
+
+    d.fillRoundRect(CARD_X - 2, CARD_Y - 2, CARD_W + 4, CARD_H + 4, 8, accent);
+    d.fillRoundRect(CARD_X,     CARD_Y,     CARD_W,     CARD_H,     7, bg);
+
+    // Big glyph centered-left
+    d.setTextSize(4);
     d.setTextColor(accent);
-    d.setCursor(x + 8, y + 8);
+    d.setCursor(CARD_X + 18, CARD_Y + 20);
     char glyph = a->name[0];
     d.print(glyph);
 
-    d.setTextSize(1);
+    // Title to the right of the glyph
+    d.setTextSize(2);
     d.setTextColor(0xFFFF);
-    d.setCursor(x + 28, y + 12);
+    d.setCursor(CARD_X + 64, CARD_Y + 24);
     d.print(a->name);
 
+    // Description wraps below
     if (a->description) {
-        d.setTextColor(selected ? 0xFFFF : 0xC618);
-        const int maxChars = g_tileW / 6 - 2;  // ~6px per char
-        std::string desc = a->description;
-        d.setCursor(x + 6, y + 32);
-        if ((int)desc.size() > maxChars) {
-            int split = desc.rfind(' ', maxChars);
-            if (split < 0) split = maxChars;
-            d.print(desc.substr(0, split).c_str());
-            d.setCursor(x + 6, y + 44);
-            std::string rest = desc.substr(split + 1);
-            if ((int)rest.size() > maxChars) rest = rest.substr(0, maxChars - 1) + "…";
-            d.print(rest.c_str());
-        } else {
-            d.print(desc.c_str());
-        }
+        d.setTextSize(1);
+        drawWrapped(a->description, CARD_X + 12, CARD_Y + 72,
+                    (CARD_W - 24) / 6, 0xFFFF);
+    }
+
+    // "Press enter to launch" footer inside card
+    d.setTextSize(1);
+    d.setTextColor(accent);
+    d.setCursor(CARD_X + 12, CARD_Y + CARD_H - 14);
+    d.print("press enter ›");
+}
+
+void drawDots() {
+    auto& d = ui::display();
+    int n = (int)g_tiles.size();
+    if (n <= 1) return;
+
+    int dotSpacing = 12;
+    int dotW       = dotSpacing * (n - 1) + 6;
+    int dotX       = (320 - dotW) / 2;
+    int dotY       = CARD_Y + CARD_H + 8;
+
+    for (int i = 0; i < n; i++) {
+        bool sel = i == g_selected;
+        int  cx  = dotX + i * dotSpacing + 3;
+        if (sel) d.fillCircle(cx, dotY, 3, 0xFFFF);
+        else     d.fillCircle(cx, dotY, 2, 0x4208);
     }
 }
 
@@ -123,18 +154,32 @@ void render() {
     ui::beginFrame();
     ui::statusbar::draw();
 
-    for (size_t i = 0; i < g_tiles.size(); i++) {
-        int col = i % g_cols;
-        int row = i / g_cols;
-        drawTile(col, row, g_tiles[i], (int)i == g_selected);
+    if (g_tiles.empty()) {
+        d.setTextColor(0x8C71);
+        d.setCursor(80, 100);
+        d.print("no apps registered");
+        ui::flush();
+        return;
     }
 
+    int n = (int)g_tiles.size();
+    if (n > 1) {
+        int prev = (g_selected - 1 + n) % n;
+        int next = (g_selected + 1) % n;
+        drawPeek(LEFT_PEEK_X,  g_tiles[prev]);
+        drawPeek(RIGHT_PEEK_X, g_tiles[next]);
+    }
+
+    drawCard(g_tiles[g_selected]);
+    drawDots();
+
+    // Footer hint
     d.fillRect(0, 226, 320, 14, 0x1082);
     d.drawFastHLine(0, 226, 320, 0x2945);
     d.setTextColor(0x8C71);
     d.setTextSize(1);
     d.setCursor(4, 230);
-    d.print(";,./ or Fn+arrows: move   enter: launch   1-9: jump");
+    d.print(",/ or arrows: switch   enter: launch   1-9: jump");
 
     ui::flush();
 }
@@ -148,7 +193,6 @@ void onEnter() {
     rebuildList();
     g_dirty = true;
 }
-
 void onExit() {}
 
 void onTick() {
@@ -162,36 +206,23 @@ void onTick() {
 
 void onKey(char ch) {
     if (g_tiles.empty()) return;
-    int n    = (int)g_tiles.size();
-    int row  = g_selected / g_cols;
-    int col  = g_selected % g_cols;
-    int rows = (n + g_cols - 1) / g_cols;
+    int n = (int)g_tiles.size();
 
-    if (ch == key::Up) {
-        row = (row - 1 + rows) % rows;
-    } else if (ch == key::Down) {
-        row = (row + 1) % rows;
-    } else if (ch == key::Left) {
-        col = (col - 1 + g_cols) % g_cols;
-    } else if (ch == key::Right) {
-        col = (col + 1) % g_cols;
+    if (ch == key::Left || ch == key::Up) {
+        g_selected = (g_selected - 1 + n) % n;
+        g_dirty    = true;
+    } else if (ch == key::Right || ch == key::Down) {
+        g_selected = (g_selected + 1) % n;
+        g_dirty    = true;
     } else if (ch == '\n') {
         launchSelected();
-        return;
     } else if (ch >= '1' && ch <= '9') {
         int idx = ch - '1';
         if (idx < n) {
             g_selected = idx;
             launchSelected();
         }
-        return;
-    } else {
-        return;
     }
-    int next = row * g_cols + col;
-    if (next >= n) next = n - 1;
-    g_selected = next;
-    g_dirty    = true;
 }
 
 void onDraw() {
