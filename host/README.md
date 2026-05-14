@@ -9,10 +9,14 @@ See [`protocol/WIRE.md`](../protocol/WIRE.md) for the wire protocol.
 
 ## Status
 
-MVP scaffolding. Connects to a Cardputer advertising the Nordic UART
-Service, prints received lines on stdout, and forwards lines typed on
-stdin to the device. No `claude` CLI integration yet — that lands once
-the dial tone is verified end-to-end.
+Connects to the Cardputer over BLE (clawd-bridge service), and bridges the
+`apps/chat` firmware app to a host-side `claude` CLI session: each
+`chat.send` event from the device spawns `claude --print [--continue]`
+in the configured working directory, streams stdout back as `chat.chunk`
+events, and emits `chat.end` when the process exits.
+
+`claude` must be on the bridge's `PATH`. Override the working directory
+the CLI runs in by setting `CLAWD_CHAT_CWD` (defaults to `$HOME`).
 
 ## Build & run
 
@@ -36,11 +40,20 @@ your terminal (Terminal.app, iTerm, VS Code, etc). If you previously
 denied, re-enable under **System Settings → Privacy & Security →
 Bluetooth**.
 
+## Run with a specific working directory
+
+```bash
+CLAWD_CHAT_CWD=~/Projects/some-repo .build/debug/clawd-bridge
+```
+
+The `claude` CLI runs in that directory, so it picks up the right repo
+context and any `CLAUDE.md` files at the root.
+
 ## Plans (in order)
 
-1. Add a dedicated `clawd-bridge` BLE service on the Cardputer (separate
-   UUIDs, see `protocol/WIRE.md`) so this daemon can coexist with Claude
-   Desktop's buddy connection.
-2. Spawn and manage a `claude` CLI process; pipe stdin/stdout and forward
-   chunks as `chat.chunk` events.
-3. `launchd` plist so the daemon starts at login.
+1. `launchd` plist so the daemon starts at login and reconnects across
+   reboots.
+2. Multi-session: more than one `claude` process behind named sessions
+   the Cardputer can switch between.
+3. Status feedback to the device while a turn is streaming (token
+   counter, elapsed time) so the chat UI feels alive.

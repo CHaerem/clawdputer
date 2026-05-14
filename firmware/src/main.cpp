@@ -21,12 +21,34 @@ void enter(const App* app) {
     if (g_active && g_active->onEnter) g_active->onEnter();
 }
 
+void cycleApp() {
+    size_t n = registry::count();
+    if (n == 0) return;
+    size_t idx = 0;
+    for (; idx < n; idx++) {
+        if (registry::at(idx) == g_active) break;
+    }
+    idx = (idx + 1) % n;
+    enter(registry::at(idx));
+    Serial.printf("[clawdputer] switched to app: %s\n",
+                  g_active ? g_active->id : "(null)");
+}
+
 void dispatchKeys() {
     if (!M5Cardputer.Keyboard.isChange()) return;
     if (!M5Cardputer.Keyboard.isPressed()) return;
-    if (!g_active || !g_active->onKey) return;
     auto state = M5Cardputer.Keyboard.keysState();
+
+    // Tab is the global "switch app" trigger. Apps don't see it.
+    if (state.tab) {
+        cycleApp();
+        return;
+    }
+
+    if (!g_active || !g_active->onKey) return;
     for (char ch : state.word) g_active->onKey(ch);
+    if (state.enter) g_active->onKey('\n');
+    if (state.del)   g_active->onKey('\b');
 }
 
 }  // namespace
