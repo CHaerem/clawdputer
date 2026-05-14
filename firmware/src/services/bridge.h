@@ -21,4 +21,10 @@ void sendLine(const std::string& line);
 enum class Transport { None, Ble, Tcp };
 Transport activeTransport();
 
+// Apps that need a quiet moment (e.g. SSH doing a blocking handshake)
+// call pause()/resume() so the periodic mDNS discovery and TCP pump
+// don't fight for the mbedTLS / mDNS heap.
+void pause();
+void resume();
+
 }  // namespace bridge

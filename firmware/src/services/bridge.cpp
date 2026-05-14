@@ -19,6 +19,7 @@ int          g_tcpPort       = 0;
 uint32_t     g_lastDiscovery = 0;
 std::string  g_tcpRxBuf;
 int          g_eventSub      = 0;
+bool         g_paused       = false;
 
 constexpr uint32_t DISCOVERY_INTERVAL_MS = 30000;
 
@@ -112,8 +113,12 @@ Transport activeTransport() {
     return Transport::None;
 }
 
+void pause()  { g_paused = true; }
+void resume() { g_paused = false; }
+
 // Called from the main loop tick driver in main.cpp.
 void tick() {
+    if (g_paused) return;
     pumpTcp();
     tryDiscover();
 }

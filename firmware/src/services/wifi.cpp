@@ -67,6 +67,10 @@ void begin() {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.onEvent(onWifiEvent);
+    // Modem power save: significant idle-current reduction at the cost of
+    // mild added latency on incoming packets. Both are acceptable for our
+    // mostly-interactive workload.
+    WiFi.setSleep(WIFI_PS_MIN_MODEM);
     WiFi.begin(ssid.c_str(), pass.c_str());
     Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
 }

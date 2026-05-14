@@ -25,6 +25,7 @@
 #include "core/app.h"
 #include "core/key.h"
 #include "secrets/ssh_hosts.h"
+#include "services/bridge.h"
 #include "services/identity.h"
 #include "services/sealed.h"
 #include "services/wifi.h"
@@ -133,11 +134,26 @@ void teardown() {
         g_session = nullptr;
     }
     g_active = {};
+    bridge::resume();
 }
 
 bool startConnection(const SshHost& h) {
+    // libssh handshake needs ~50 KB of contiguous heap. Refuse early with
+    // a clear error rather than crashing partway through.
+    uint32_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < 60000) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "low memory (%u bytes free)", (unsigned)freeHeap);
+        g_status = buf;
+        return false;
+    }
+
+    // Tell the bridge service to stop its mDNS / TCP pump while we hold the
+    // mbedTLS context. Reduces the chance of a heap fight during handshake.
+    bridge::pause();
+
     g_session = ssh_new();
-    if (!g_session) { g_status = "ssh_new failed"; return false; }
+    if (!g_session) { g_status = "ssh_new failed"; bridge::resume(); return false; }
 
     int port    = h.port > 0 ? h.port : 22;
     int verbose = SSH_LOG_NOLOG;
@@ -145,6 +161,12 @@ bool startConnection(const SshHost& h) {
     ssh_options_set(g_session, SSH_OPTIONS_USER,    h.user);
     ssh_options_set(g_session, SSH_OPTIONS_PORT,    &port);
     ssh_options_set(g_session, SSH_OPTIONS_LOG_VERBOSITY, &verbose);
+    // Bound the handshake so a stuck host can't wedge the loop forever.
+    int timeoutSec = 8;
+    ssh_options_set(g_session, SSH_OPTIONS_TIMEOUT, &timeoutSec);
+
+    Serial.printf("[ssh] connect %s@%s:%d (free heap %u)\n",
+                  h.user, h.host, port, (unsigned)ESP.getFreeHeap());
 
     if (ssh_connect(g_session) != SSH_OK) {
         g_status = std::string("connect: ") + ssh_get_error(g_session);
@@ -184,6 +206,7 @@ bool startConnection(const SshHost& h) {
         return false;
     }
     ssh_channel_set_blocking(g_channel, 0);
+    Serial.printf("[ssh] connected (free heap %u)\n", (unsigned)ESP.getFreeHeap());
     return true;
 }
 
@@ -516,7 +539,10 @@ void onTick() {
         if (!startConnection(g_active)) {
             teardown();
             g_stage = Stage::Error;
-        } else if (g_adhocConnected) {
+        } else {
+            bridge::resume();  // handshake done, safe to pump again
+        }
+        if (g_stage == Stage::Connecting && g_adhocConnected) {
             g_stage = Stage::AskSave;
         } else {
             g_stage = Stage::Connected;
