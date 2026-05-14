@@ -140,6 +140,7 @@ void setup() {
     (void)ui::display();
 
     updater::begin();
+    identity::begin();
     ble::begin();
     wifi::begin();
 
