@@ -17,6 +17,7 @@
 #include "core/app.h"
 #include "core/event_bus.h"
 #include "services/ble.h"
+#include "ui/canvas.h"
 #include "ui/statusbar.h"
 
 namespace {
@@ -101,8 +102,8 @@ std::vector<std::string> wrap(const std::string& s, size_t maxW) {
 }
 
 void render() {
-    auto& d = M5Cardputer.Display;
-    d.fillScreen(BLACK);
+    auto& d = ui::display();
+    ui::beginFrame();
     ui::statusbar::draw();
 
     if (g_busy) {
@@ -152,6 +153,8 @@ void render() {
     if ((millis() / 500) % 2 == 0) {
         d.print("_");
     }
+
+    ui::flush();
 }
 
 void sendCurrent() {

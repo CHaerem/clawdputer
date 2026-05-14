@@ -10,6 +10,7 @@
 #include "core/app.h"
 #include "core/key.h"
 #include "core/registry.h"
+#include "ui/canvas.h"
 #include "ui/statusbar.h"
 
 extern void clawd_request_app(const App* app);
@@ -59,7 +60,7 @@ uint16_t tileAccent(const App* a) {
 void drawTile(int col, int row, const App* a, bool selected) {
     int x = 6 + col * (TILE_W + GAP_X);
     int y = GRID_TOP + row * (TILE_H + GAP_Y);
-    auto& d = M5Cardputer.Display;
+    auto& d = ui::display();
 
     uint16_t bg     = tileColor(a);
     uint16_t accent = tileAccent(a);
@@ -99,8 +100,8 @@ void drawTile(int col, int row, const App* a, bool selected) {
 }
 
 void render() {
-    auto& d = M5Cardputer.Display;
-    d.fillScreen(BLACK);
+    auto& d = ui::display();
+    ui::beginFrame();
     ui::statusbar::draw();
 
     for (size_t i = 0; i < g_tiles.size(); i++) {
@@ -116,6 +117,8 @@ void render() {
     d.setTextSize(1);
     d.setCursor(4, 230);
     d.print("arrows: move   enter: launch   1-9: jump");
+
+    ui::flush();
 }
 
 void launchSelected() {

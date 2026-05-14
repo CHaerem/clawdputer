@@ -12,6 +12,7 @@
 #include "core/app.h"
 #include "core/event_bus.h"
 #include "services/ble.h"
+#include "ui/canvas.h"
 #include "ui/statusbar.h"
 
 namespace {
@@ -29,8 +30,8 @@ bool     g_screenDirty = true;
 int      g_sub         = 0;
 
 void render() {
-    auto& d = M5Cardputer.Display;
-    d.fillScreen(BLACK);
+    auto& d = ui::display();
+    ui::beginFrame();
     ui::statusbar::draw();
 
     int y = ui::statusbar::HEIGHT + 6;
@@ -125,6 +126,8 @@ void render() {
     d.setTextColor(0x8C71);
     d.setCursor(4, 230);
     d.printf("appr:%u  deny:%u    tab: home", (unsigned)g_approvals, (unsigned)g_denials);
+
+    ui::flush();
 }
 
 void sendPermission(const String& id, const char* decision) {

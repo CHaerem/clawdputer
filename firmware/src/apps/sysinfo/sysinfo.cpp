@@ -9,6 +9,7 @@
 #include "services/ble.h"
 #include "services/updater.h"
 #include "services/wifi.h"
+#include "ui/canvas.h"
 #include "ui/statusbar.h"
 
 namespace {
@@ -26,7 +27,7 @@ void formatUptime(char* buf, size_t n, uint32_t secs) {
 }
 
 void drawRow(int& y, const char* label, const char* value, uint16_t valColor = 0xFFFF) {
-    auto& d = M5Cardputer.Display;
+    auto& d = ui::display();
     d.setCursor(10, y);
     d.setTextColor(0x8C71);
     d.print(label);
@@ -37,8 +38,8 @@ void drawRow(int& y, const char* label, const char* value, uint16_t valColor = 0
 }
 
 void render() {
-    auto& d = M5Cardputer.Display;
-    d.fillScreen(BLACK);
+    auto& d = ui::display();
+    ui::beginFrame();
     ui::statusbar::draw();
 
     d.setTextSize(2);
@@ -94,6 +95,8 @@ void render() {
     d.setTextColor(0x8C71);
     d.setCursor(4, 230);
     d.print("tab: home");
+
+    ui::flush();
 }
 
 void onEnter() {

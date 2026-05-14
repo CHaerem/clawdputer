@@ -13,6 +13,7 @@
 #include "services/ble.h"
 #include "services/updater.h"
 #include "services/wifi.h"
+#include "ui/canvas.h"
 #include "ui/statusbar.h"
 
 #if __has_include("wifi_secrets.h")
@@ -108,8 +109,8 @@ void moveSelection(int dir) {
 }
 
 void render() {
-    auto& d = M5Cardputer.Display;
-    d.fillScreen(BLACK);
+    auto& d = ui::display();
+    ui::beginFrame();
     ui::statusbar::draw();
 
     d.setTextSize(2);
@@ -160,6 +161,8 @@ void render() {
     d.setTextColor(0x8C71);
     d.setCursor(4, 230);
     d.print("up/down: move   enter: invoke   tab: home");
+
+    ui::flush();
 }
 
 void onEnter() {

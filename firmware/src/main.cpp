@@ -14,6 +14,7 @@
 #include "services/ota.h"
 #include "services/updater.h"
 #include "services/wifi.h"
+#include "ui/canvas.h"
 
 namespace {
 
@@ -38,11 +39,8 @@ const App* findApp(const char* id) {
 
 void goHome() {
     const App* home = findApp("home");
-    if (home) {
-        enter(home);
-    } else if (registry::count() > 0) {
-        enter(registry::at(0));
-    }
+    if (home) enter(home);
+    else if (registry::count() > 0) enter(registry::at(0));
 }
 
 void dispatchKeys() {
@@ -50,7 +48,6 @@ void dispatchKeys() {
     if (!M5Cardputer.Keyboard.isPressed()) return;
     auto state = M5Cardputer.Keyboard.keysState();
 
-    // Tab always takes you home — like the home button on a phone.
     if (state.tab) {
         goHome();
         return;
@@ -58,28 +55,35 @@ void dispatchKeys() {
 
     if (!g_active || !g_active->onKey) return;
 
-    for (char ch : state.word) {
-        if (state.fn) {
-            // Cardputer's Fn modifier turns ;./,/ into arrow keys.
+    // Fn + ;./, → arrow keys. Translate first; if any of those keys are
+    // present in this keystate, suppress the corresponding literal char.
+    if (state.fn) {
+        bool handled = false;
+        for (char ch : state.word) {
             switch (ch) {
-                case ';': g_active->onKey(key::Up);    continue;
-                case '.': g_active->onKey(key::Down);  continue;
-                case ',': g_active->onKey(key::Left);  continue;
-                case '/': g_active->onKey(key::Right); continue;
+                case ';': g_active->onKey(key::Up);    handled = true; break;
+                case '.': g_active->onKey(key::Down);  handled = true; break;
+                case ',': g_active->onKey(key::Left);  handled = true; break;
+                case '/': g_active->onKey(key::Right); handled = true; break;
                 default: break;
             }
         }
-        g_active->onKey(ch);
+        if (handled) {
+            if (state.enter) g_active->onKey('\n');
+            if (state.del)   g_active->onKey('\b');
+            return;
+        }
     }
+
+    for (char ch : state.word) g_active->onKey(ch);
     if (state.enter) g_active->onKey('\n');
     if (state.del)   g_active->onKey('\b');
 }
 
 }  // namespace
 
-// Apps call this to ask for a switch. We defer the actual enter() until the
-// next loop iteration so the calling app's current callback can return
-// cleanly first.
+// Apps call this to queue a switch. Applied at the start of the next loop
+// iteration so the caller's onKey/onTick can return cleanly first.
 void clawd_request_app(const App* app) { g_pending = app; }
 
 void setup() {
@@ -93,7 +97,11 @@ void setup() {
     Serial.println("[clawdputer] boot");
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
-    updater::begin();  // first: checks for failed flash + may roll back
+    // Touching ui::display() triggers the canvas allocation so we know up
+    // front whether the backbuffer is available.
+    (void)ui::display();
+
+    updater::begin();
     ble::begin();
     wifi::begin();
 
@@ -106,7 +114,6 @@ void loop() {
     ota::tick();
     updater::tick();
     if (ota::isUpdating()) {
-        // OTA owns the screen and the CPU; skip app ticks until reboot.
         delay(5);
         return;
     }

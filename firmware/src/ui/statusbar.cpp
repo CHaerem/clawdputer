@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <M5Cardputer.h>
 
+#include "canvas.h"
 #include "services/ble.h"
 #include "services/wifi.h"
 
@@ -11,7 +12,7 @@ namespace ui::statusbar {
 namespace {
 
 void drawBatteryIcon(int x, int y, int pct, bool charging) {
-    auto& d   = M5Cardputer.Display;
+    auto& d   = ui::display();
     int   bw  = 22;   // body width
     int   bh  = 10;   // body height
     uint16_t color = pct < 20 ? 0xF800 : (pct < 50 ? 0xFFE0 : 0x07E0);
@@ -32,13 +33,13 @@ void drawBatteryIcon(int x, int y, int pct, bool charging) {
 
 void drawLinkDot(int x, int y, bool on) {
     uint16_t c = on ? 0x07E0 : 0x4208;
-    M5Cardputer.Display.fillCircle(x, y, 3, c);
+    ui::display().fillCircle(x, y, 3, c);
 }
 
 }  // namespace
 
 void draw() {
-    auto& d = M5Cardputer.Display;
+    auto& d = ui::display();
 
     d.fillRect(0, 0, 320, HEIGHT, 0x1082);
     d.drawFastHLine(0, HEIGHT - 1, 320, 0x2945);
