@@ -36,7 +36,8 @@ and one `REGISTER_APP(...)` call.
 firmware/                  ESP32 firmware (PlatformIO)
   src/main.cpp             entrypoint — boots services, runs active app
   src/core/                App struct, registry, event bus, key codes
-  src/services/            ble, wifi, ota, updater, identity, sealed
+  src/services/            ble, bridge (BLE+TCP transport), wifi, ota,
+                           updater, identity, sealed
   src/ui/                  canvas (backbuffer sprite), statusbar, chrome,
                            list, toast — shared primitives
   src/apps/<name>/         one directory per app, REGISTER_APP() inside
@@ -45,11 +46,12 @@ firmware/                  ESP32 firmware (PlatformIO)
   scripts/                 PlatformIO pre-build hooks (version, secrets)
   platformio.ini           envs: cardputer (USB) and cardputer-ota
 host/                      Mac-side bridge daemon (Swift)
-  Sources/clawd-bridge/    CoreBluetooth central + claude CLI runner + usage
-  install/                 launchd plist installer
+  Sources/clawd-bridge/    CoreBluetooth central, TCP listener, claude
+                           CLI runner, stats-cache watcher
+  install/                 launchd plist installer + online.sh one-liner
 protocol/WIRE.md           authoritative wire-protocol spec
 tools/                     seal-hosts.py + plaintext hosts.json (gitignored)
-.github/workflows/         CI build + GitHub release for OTA updates
+.github/workflows/         CI: firmware (OTA) + host (release binary)
 ```
 
 ## Hardware
@@ -149,23 +151,31 @@ and [`tools/seal-hosts.py`](tools/seal-hosts.py) for the encrypt script.
 
 ## Status
 
-Working end to end on a single device:
+Working end to end:
 
-- Coverflow launcher with persistent status bar (BLE/wifi/battery)
+- Coverflow launcher with persistent status bar (BLE / WiFi / battery %)
 - Buddy approve/deny against Claude Desktop
 - Chat over bridge with streaming `claude --print --output-format stream-json`
-- Usage snapshot pulling from stats-cache + `/cost`
+- Usage snapshot pulling from stats-cache + `/cost`, with **live push** —
+  bridge watches `~/.claude/stats-cache.json` and the device updates as
+  Claude Code finishes turns, no manual refresh
+- **Dual-transport bridge:** BLE within the room, automatic mDNS-discovered
+  TCP fallback when only WiFi is reachable. Status bar dot is green for
+  BLE, amber for TCP, grey for offline
+- **One-line bridge install** on any Mac via the
+  `online.sh` script — CI publishes the pre-built `clawd-bridge` binary
+  to the GitHub `latest` release
 - SSH key auth against Mac, sealed + saved + ad-hoc host management
 - WiFi scan/connect from device
 - OTA + GitOps + app-level rollback
 - Backbuffer-rendered UI, no flicker, side-button (G0) shortcut to home
-- C++17 firmware; flash 45.6% used, RAM 21.8%
+- C++17 firmware; flash 46.5% used, RAM 22.0%
 
 Known limitations (next things to tackle):
 
-- BLE-only bridge — no rechability outside ~5-10 m of the Mac
-- Bridge is pull-only — no proactive push when stats change
 - ANSI escape sequences are stripped in chat/SSH terminal views
+- Mac must be on (or reachable on the LAN) for chat/usage. Standalone
+  Cardputer chat via direct Anthropic API is the obvious next step
 
 ## Documentation entry points
 
