@@ -38,6 +38,7 @@ int  g_selected = 0;
 bool g_dirty    = true;
 std::string g_toast;
 uint32_t    g_toastUntil = 0;
+updater::Status g_lastStatus = updater::Status::Idle;
 
 void toast(const std::string& msg) {
     g_toast      = msg;
@@ -408,6 +409,21 @@ void onTick() {
     if (!g_toast.empty() && now >= g_toastUntil) {
         g_toast.clear();
         g_dirty = true;
+    }
+
+    // Show result when update check completes
+    updater::Status status = updater::status();
+    if (status != g_lastStatus) {
+        g_lastStatus = status;
+        if (status == updater::Status::UpToDate) {
+            toast("✓ up to date");
+        } else if (status == updater::Status::Failed) {
+            std::string msg = "✗ update failed: ";
+            msg += updater::lastError();
+            if (msg.size() > 32) msg = msg.substr(0, 32);
+            toast(msg);
+        }
+        // Downloading/Checking status is handled by the updater itself
     }
 }
 
