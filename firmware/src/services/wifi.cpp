@@ -21,6 +21,7 @@ namespace {
 
 bool g_enabled   = false;
 bool g_connected = false;
+bool g_paused    = false;
 std::string g_ssid;
 
 void onWifiEvent(WiFiEvent_t event) {
@@ -139,5 +140,32 @@ void clearCredentials() {
     prefs.end();
     Serial.println("[wifi] credentials cleared");
 }
+
+void pause() {
+    if (g_paused) return;
+    Serial.println("[wifi] pause (radio off)");
+    WiFi.disconnect(true, false);
+    WiFi.mode(WIFI_OFF);
+    g_paused    = true;
+    g_connected = false;
+}
+
+void resume() {
+    if (!g_paused && g_enabled) return;
+    if (g_ssid.empty()) return;
+    Preferences prefs;
+    prefs.begin("wifi", true);
+    String pass = prefs.getString("pass", "");
+    prefs.end();
+    Serial.printf("[wifi] resume (connecting %s)\n", g_ssid.c_str());
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(WIFI_PS_MIN_MODEM);
+    WiFi.onEvent(onWifiEvent);
+    WiFi.begin(g_ssid.c_str(), pass.c_str());
+    g_paused  = false;
+    g_enabled = true;
+}
+
+bool isPaused() { return g_paused; }
 
 }  // namespace wifi

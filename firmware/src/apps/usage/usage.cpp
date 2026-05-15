@@ -11,6 +11,7 @@
 #include "core/event_bus.h"
 #include "services/ble.h"
 #include "services/bridge.h"
+#include "services/wifi.h"
 #include "ui/canvas.h"
 #include "ui/statusbar.h"
 
@@ -209,10 +210,9 @@ void render() {
 }
 
 void onEnter() {
+    wifi::resume();   // bridge may be reached over TCP if BLE is down
     g_sub = events::subscribe(onEvent);
     if (g_state == State::Idle) g_status.clear();
-    // Auto-request if bridge is already up, then subscribe so the bridge
-    // pushes updates whenever stats-cache.json changes.
     if (bridge::isConnected()) {
         requestUsage();
         bridge::sendLine("{\"cmd\":\"subscribe\",\"channel\":\"usage\"}");

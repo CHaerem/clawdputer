@@ -263,6 +263,7 @@ void startScan() {
 }
 
 void onEnter() {
+    wifi::resume();   // make sure the radio is up before we scan
     g_stage = wifi::isConnected() ? Stage::Connected : Stage::Idle;
     g_dirty = true;
 }

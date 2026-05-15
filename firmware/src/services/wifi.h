@@ -30,6 +30,13 @@ void connectNow(const std::string& ssid, const std::string& pass);
 // Wipe stored credentials.
 void clearCredentials();
 
+// Power-management hooks. Apps that need WiFi (SSH, WiFi setup, Chat / Usage
+// when the bridge is on TCP) call resume() in onEnter; power::tick() calls
+// pause() once the device has been idle for a few minutes.
+void pause();   // turns the radio off; safe no-op if already off
+void resume();  // turns the radio on; reconnects with stored credentials
+bool isPaused();
+
 // Async WiFi scan. startScan() kicks off, scanStatus() polls. Returns count
 // of networks when finished (>=0), -1 while running, -2 if failed.
 void startScan();

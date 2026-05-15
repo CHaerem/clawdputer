@@ -6,6 +6,8 @@
 #include <esp_sleep.h>
 #include <esp32-hal-cpu.h>
 
+#include "wifi.h"
+
 namespace power {
 
 namespace {
@@ -17,6 +19,7 @@ constexpr uint32_t ACTIVE_WINDOW_MS = 5000;
 constexpr uint32_t DIM_AFTER_MS     = 60000;
 constexpr uint32_t OFF_AFTER_MS     = 180000;
 constexpr uint32_t PANEL_SLEEP_MS   = 600000;   // 10 min — full panel off
+constexpr uint32_t WIFI_PAUSE_MS    = 300000;   // 5 min — drop WiFi radio
 
 // Adaptive loop pacing: keeps the main loop responsive when the user is
 // active, but stretches the delay otherwise so the SoC enters
@@ -67,6 +70,8 @@ void noteActivity() {
     g_lastActivity = millis();
     applyBacklight(255);
     setPanel(false);
+    // Don't auto-resume WiFi on every keypress — only the apps that need
+    // it (SSH, WiFi setup, etc.) request resume() in onEnter.
 }
 
 void tick() {
@@ -82,6 +87,13 @@ void tick() {
         applyBacklight(64);
     } else {
         applyBacklight(255);
+    }
+
+    // Cut WiFi radio after extended idle — the largest current consumer
+    // when no one's actively using SSH / chat / usage. Apps that need it
+    // call wifi::resume() in onEnter and we recover within a few seconds.
+    if (idleMs >= WIFI_PAUSE_MS && !wifi::isPaused()) {
+        wifi::pause();
     }
 }
 
