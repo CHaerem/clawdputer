@@ -180,9 +180,16 @@ void loop() {
     }
     dispatchSideButton();
     dispatchKeys();
-    imu::tick();
+    // IMU polled at ~10 Hz instead of the full loop rate — shake events
+    // are still caught reliably and we save a noticeable bit of current.
+    static uint32_t lastImuTick = 0;
+    uint32_t now = millis();
+    if (now - lastImuTick >= 100) {
+        lastImuTick = now;
+        imu::tick();
+    }
     if (g_active && g_active->onTick) g_active->onTick();
     if (g_active && g_active->onDraw) g_active->onDraw();
     power::tick();
-    delay(20);
+    delay(power::loopDelayMs());
 }
