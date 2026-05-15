@@ -40,6 +40,10 @@ std::string g_toast;
 uint32_t    g_toastUntil = 0;
 updater::Status g_lastStatus = updater::Status::Idle;
 
+// Update monitor mode
+bool g_monitoringUpdate = false;
+std::string g_prevLatest;
+
 void toast(const std::string& msg) {
     g_toast      = msg;
     g_toastUntil = millis() + 2500;
@@ -79,7 +83,9 @@ void actSleepNow() {
 
 void actCheckUpdate() {
     updater::checkNow();
-    toast("checking for updates…");
+    g_monitoringUpdate = true;
+    g_prevLatest = updater::latestVersion();
+    g_dirty = true;
 }
 
 void actClearWifi() {
@@ -288,7 +294,67 @@ void renderScrollable(const char* title, uint16_t titleColor,
     ui::flush();
 }
 
+void renderUpdateProgress() {
+    auto& d = ui::display();
+    ui::beginFrame();
+    ui::statusbar::draw();
+
+    updater::Status status = updater::status();
+    const char* statusText = updater::statusText();
+    std::string latest = updater::latestVersion();
+    
+    d.setTextSize(2);
+    d.setTextColor(0xFFFF);
+    d.setCursor(8, ui::statusbar::HEIGHT + 8);
+    d.print("UPDATE");
+
+    d.setTextSize(1);
+    d.setTextColor(0x07E0);
+    d.setCursor(8, ui::statusbar::HEIGHT + 28);
+    
+    if (status == updater::Status::Checking) {
+        d.print("Checking for updates…");
+    } else if (status == updater::Status::Downloading) {
+        d.printf("Downloading %s", latest.c_str());
+    } else if (status == updater::Status::UpToDate) {
+        d.setTextColor(0x07E0);
+        d.print("✓ Already up to date");
+        d.setTextSize(0);
+        d.setTextColor(0x8C71);
+        d.setCursor(8, ui::statusbar::HEIGHT + 55);
+        d.printf("Current: %s", updater::currentVersion());
+    } else if (status == updater::Status::Failed) {
+        d.setTextColor(0xF800);
+        d.print("✗ Update failed");
+        d.setTextSize(0);
+        d.setTextColor(0x8C71);
+        d.setCursor(8, ui::statusbar::HEIGHT + 55);
+        std::string err = updater::lastError();
+        if (err.size() > 38) err = err.substr(0, 35) + "…";
+        d.print(err.c_str());
+    } else {
+        // Idle
+        d.print("Ready");
+    }
+
+    d.fillRect(0, 124, SCREEN_W, 11, 0x1082);
+    d.drawFastHLine(0, 124, SCREEN_W, 0x2945);
+    d.setTextSize(0);
+    d.setTextColor(0x8C71);
+    d.setCursor(4, 127);
+    if (status == updater::Status::UpToDate || status == updater::Status::Failed) {
+        d.print("enter back to settings");
+    } else {
+        d.print("monitoring…  don't unplug");
+    }
+    ui::flush();
+}
+
 void render() {
+    if (g_monitoringUpdate) {
+        renderUpdateProgress();
+        return;
+    }
     if (g_showPubkey) {
         renderScrollable("SSH pubkey (paste to authorized_keys)", 0xFFFF,
                          identity::publicKeyOpenSsh(), 0x07E0);
@@ -411,7 +477,13 @@ void onTick() {
         g_dirty = true;
     }
 
-    // Show result when update check completes
+    // While monitoring updates, always refresh to show live status
+    if (g_monitoringUpdate) {
+        g_dirty = true;
+        return;
+    }
+
+    // Show result when update check completes (if not already monitoring)
     updater::Status status = updater::status();
     if (status != g_lastStatus) {
         g_lastStatus = status;
@@ -423,11 +495,20 @@ void onTick() {
             if (msg.size() > 32) msg = msg.substr(0, 32);
             toast(msg);
         }
-        // Downloading/Checking status is handled by the updater itself
     }
 }
 
 void onKey(char ch) {
+    if (g_monitoringUpdate) {
+        updater::Status status = updater::status();
+        // Allow exit if check completed (success or failure)
+        if ((status == updater::Status::UpToDate || status == updater::Status::Failed) 
+            && (ch == '\n' || ch == key::Left || ch == '\b')) {
+            g_monitoringUpdate = false;
+            g_dirty = true;
+        }
+        return;
+    }
     if (g_showPubkey || g_showSealKey || g_showInstall) {
         if      (ch == key::Up   && g_pubkeyScroll > 0) { g_pubkeyScroll--; g_dirty = true; }
         else if (ch == key::Down)                        { g_pubkeyScroll++; g_dirty = true; }
