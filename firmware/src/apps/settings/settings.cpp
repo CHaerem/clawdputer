@@ -156,7 +156,7 @@ void rebuild() {
         it.isHeader = true;
         return it;
     };
-    auto info = [](const char* label, std::string value) {
+    auto info = [](const char* label, const std::string& value) {
         Item it;
         it.label  = label;
         it.value  = value;
@@ -168,7 +168,7 @@ void rebuild() {
         it.action = fn;
         return it;
     };
-    auto tog = [](const char* label, std::string value, void (*fn)()) {
+    auto tog = [](const char* label, const std::string& value, void (*fn)()) {
         Item it;
         it.label  = label;
         it.value  = value;

@@ -48,7 +48,7 @@ void enter(const App* app) {
     if (g_active && g_active->onExit) g_active->onExit();
     applyServices(app->services);
     g_active = app;
-    if (g_active && g_active->onEnter) g_active->onEnter();
+    if (g_active->onEnter) g_active->onEnter();
     Serial.printf("[clawdputer] entered app: %s\n", g_active->id);
 }
 
