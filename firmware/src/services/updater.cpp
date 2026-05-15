@@ -166,6 +166,10 @@ void runCheck() {
 
     httpUpdate.rebootOnUpdate(true);
     httpUpdate.onProgress(onUpdateProgress);
+    // GitHub serves the release artifact via a 302 to objects.githubusercontent.com.
+    // HTTPUpdate refuses to follow redirects by default ("Wrong HTTP Code")
+    // — opt in explicitly.
+    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     auto ret = httpUpdate.update(client, FIRMWARE_URL);
     if (ret == HTTP_UPDATE_FAILED) {
         g_status    = updater::Status::Failed;

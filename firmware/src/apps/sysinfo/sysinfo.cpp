@@ -86,6 +86,8 @@ void render() {
     d.setTextColor(0x8C71);
     d.setCursor(4, 127);
     d.print("tab: home");
+
+    ui::flush();
 }
 
 void onEnter() { g_dirty = true; g_lastTick = 0; }
