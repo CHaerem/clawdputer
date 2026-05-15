@@ -124,6 +124,30 @@ void connectNow(const std::string& ssidNew, const std::string& passNew) {
     Serial.printf("[wifi] connectNow to %s\n", ssidNew.c_str());
 }
 
+bool reconnect() {
+    Preferences prefs;
+    prefs.begin("wifi", true);
+    std::string ssid = prefs.getString("ssid", "").c_str();
+    std::string pass = prefs.getString("pass", "").c_str();
+    prefs.end();
+    if (ssid.empty()) {
+        Serial.println("[wifi] reconnect: no stored credentials");
+        return false;
+    }
+    if (!g_enabled) {
+        WiFi.mode(WIFI_STA);
+        WiFi.setAutoReconnect(true);
+        WiFi.onEvent(onWifiEvent);
+        g_enabled = true;
+    } else {
+        WiFi.disconnect(false, true);
+    }
+    g_ssid = ssid;
+    WiFi.begin(ssid.c_str(), pass.c_str());
+    Serial.printf("[wifi] reconnect to %s\n", ssid.c_str());
+    return true;
+}
+
 void startScan() {
     if (!g_enabled) {
         WiFi.mode(WIFI_STA);

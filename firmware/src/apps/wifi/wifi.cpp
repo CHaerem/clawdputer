@@ -75,8 +75,15 @@ void renderIdle() {
     d.setCursor(6, ui::statusbar::HEIGHT + 50);
     d.setTextColor(0xFFE0);
     d.print("press enter to scan");
+    if (!wifi::isConnected() && !wifi::ssid().empty()) {
+        d.setCursor(6, ui::statusbar::HEIGHT + 62);
+        d.setTextColor(0x07FF);
+        d.print("press R to retry");
+    }
 
-    drawFooter("enter scan   tab home");
+    drawFooter(!wifi::isConnected() && !wifi::ssid().empty()
+                   ? "enter scan   r retry   tab home"
+                   : "enter scan   tab home");
     ui::flush();
 }
 
@@ -300,6 +307,13 @@ void onKey(char ch) {
     switch (g_stage) {
         case Stage::Idle:
             if (ch == '\n') startScan();
+            else if (ch == 'r' || ch == 'R') {
+                if (wifi::reconnect()) {
+                    g_pickedSsid   = wifi::ssid();
+                    g_connectStart = millis();
+                    g_stage        = Stage::Connecting;
+                }
+            }
             break;
 
         case Stage::List: {
@@ -355,7 +369,7 @@ App wifi_app = {
     .id           = "wifi",
     .name         = "WiFi",
     .description  = "Scan & connect",
-    .services     = SVC_WIFI,
+    .services     = SVC_WIFI | SVC_CANVAS,
     .onEnter      = onEnter,
     .onExit      = onExit,
     .onTick       = onTick,

@@ -27,6 +27,11 @@ void setCredentials(const std::string& ssid, const std::string& pass);
 // isConnected().
 void connectNow(const std::string& ssid, const std::string& pass);
 
+// Re-attempt connect using credentials already in NVS. No-op if none stored.
+// Useful after the AP comes back online or radio drops without auto-reconnect
+// recovering on its own.
+bool reconnect();
+
 // Wipe stored credentials.
 void clearCredentials();
 
