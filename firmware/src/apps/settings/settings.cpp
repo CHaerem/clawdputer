@@ -467,6 +467,17 @@ void onExit() {}
 void onTick() {
     static uint32_t lastRefresh = 0;
     uint32_t now = millis();
+    
+    // While monitoring updates, periodically refresh to show live status
+    if (g_monitoringUpdate) {
+        updater::Status status = updater::status();
+        if (now - lastRefresh >= 500) {  // Refresh every 500ms max during update
+            lastRefresh = now;
+            g_dirty = true;
+        }
+        return;
+    }
+
     if (now - lastRefresh >= 1000) {
         lastRefresh = now;
         rebuild();
@@ -475,12 +486,6 @@ void onTick() {
     if (!g_toast.empty() && now >= g_toastUntil) {
         g_toast.clear();
         g_dirty = true;
-    }
-
-    // While monitoring updates, always refresh to show live status
-    if (g_monitoringUpdate) {
-        g_dirty = true;
-        return;
     }
 
     // Show result when update check completes (if not already monitoring)
