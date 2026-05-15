@@ -69,9 +69,14 @@ void dispatchSideButton() {
 }
 
 void dispatchKeys() {
+    // isChange() has a side effect (updates _last_key_size) so we MUST
+    // only call it once per loop iteration. Putting it anywhere else in
+    // the loop steals the edge transition.
     if (!M5Cardputer.Keyboard.isChange()) return;
     if (!M5Cardputer.Keyboard.isPressed()) return;
     power::noteActivity();
+    // Any keypress also cancels a pending low-battery sleep countdown.
+    if (power::lowBatteryWarning()) power::cancelLowBatteryWarning();
     auto state = M5Cardputer.Keyboard.keysState();
 
     g_lastKey.fn    = state.fn;
@@ -179,10 +184,6 @@ void loop() {
         enter(next);
     }
     dispatchSideButton();
-    // Any keypress cancels a pending low-battery sleep countdown.
-    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-        if (power::lowBatteryWarning()) power::cancelLowBatteryWarning();
-    }
     dispatchKeys();
     // IMU polled at ~10 Hz instead of the full loop rate — shake events
     // are still caught reliably and we save a noticeable bit of current.
