@@ -24,4 +24,11 @@ void        setDeviceName(const std::string& name);
 // Erase stored bonds. The next pairing will display a fresh passkey.
 void clearBonds();
 
+// Power-management hooks. Framework calls pause() when the active app
+// declares SVC_NONE; resume() when an app with SVC_BLE is entered.
+// pause() stops advertising only — existing connections survive.
+void pause();
+void resume();
+bool isPaused();
+
 }  // namespace ble

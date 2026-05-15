@@ -32,6 +32,7 @@ struct Link {
 Link        g_nus(EventSource::NusLink,    "nus");
 Link        g_bridge(EventSource::BridgeLink, "bridge");
 std::string g_deviceName = "Claude-Cardputer";
+volatile bool g_paused = false;
 
 Link* linkForChar(NimBLECharacteristic* c) {
     if (c == g_nus.tx)    return &g_nus;
@@ -88,11 +89,11 @@ class SrvCallback : public NimBLEServerCallbacks {
         // Keep advertising so a second central (buddy + bridge in parallel,
         // or bridge while Claude Desktop is already paired) can still find
         // us. NimBLE stops advertising by default after the first connect.
-        NimBLEDevice::startAdvertising();
+        if (!g_paused) NimBLEDevice::startAdvertising();
     }
     void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
         Serial.printf("[ble] peer disconnected (reason=%d)\n", reason);
-        NimBLEDevice::startAdvertising();
+        if (!g_paused) NimBLEDevice::startAdvertising();
     }
 };
 
@@ -176,5 +177,21 @@ std::string deviceName() { return g_deviceName; }
 void setDeviceName(const std::string& name) { g_deviceName = name; }
 
 void clearBonds() { NimBLEDevice::deleteAllBonds(); }
+
+void pause() {
+    if (g_paused) return;
+    NimBLEDevice::stopAdvertising();
+    g_paused = true;
+    Serial.println("[ble] advertising paused");
+}
+
+void resume() {
+    if (!g_paused) return;
+    NimBLEDevice::startAdvertising();
+    g_paused = false;
+    Serial.println("[ble] advertising resumed");
+}
+
+bool isPaused() { return g_paused; }
 
 }  // namespace ble

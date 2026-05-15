@@ -20,6 +20,7 @@
 #include "services/ota.h"
 #include "services/power.h"
 #include "services/settings.h"
+#include "services/sd.h"
 #include "services/updater.h"
 #include "services/wifi.h"
 
@@ -31,9 +32,21 @@ namespace {
 const App* g_active  = nullptr;
 const App* g_pending = nullptr;
 
+void applyServices(uint32_t needed) {
+    if (needed & SVC_WIFI) { if (wifi::isPaused()) wifi::resume(); }
+    else                   { if (!wifi::isPaused()) wifi::pause(); }
+
+    if (needed & SVC_BLE)  { if (ble::isPaused()) ble::resume(); }
+    else                   { if (!ble::isPaused()) ble::pause(); }
+
+    if (needed & SVC_SD)   { if (sd::isPaused()) sd::resume(); }
+    else                   { if (!sd::isPaused()) sd::pause(); }
+}
+
 void enter(const App* app) {
     if (!app) return;
     if (g_active && g_active->onExit) g_active->onExit();
+    applyServices(app->services);
     g_active = app;
     if (g_active && g_active->onEnter) g_active->onEnter();
     Serial.printf("[clawdputer] entered app: %s\n", g_active->id);
@@ -163,6 +176,7 @@ void setup() {
     identity::begin();
     ble::begin();
     wifi::begin();
+    sd::begin();
     bridge::begin();
 
     goHome();

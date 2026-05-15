@@ -25,6 +25,7 @@ and one `REGISTER_APP(...)` call.
 | Buddy    | Claude Desktop companion — session counts, tokens, approve/deny prompts; `u` → Usage |
 | Chat     | Type prompts on the Cardputer; bridge spawns `claude --print` and streams text back |
 | SSH      | WiFi SSH client with Ed25519 key auth, sealed-secrets host presets, ad-hoc add + NVS save |
+| Game Boy | GB emulator — browse and launch `.gb` ROMs from microSD; E/S/A/D + K/L + 1/2 controls |
 | Settings | Sections: Device info (sysinfo), Battery graph, Identity, Network, Preferences, Updates, System |
 
 ## Repo layout
@@ -165,6 +166,9 @@ Working end to end:
 - SSH key auth against Mac, sealed + saved + ad-hoc host management
 - WiFi scan/connect from device
 - OTA + GitOps + app-level rollback
+- **Declarative service lifecycle** — apps declare `SVC_BLE`/`SVC_WIFI`
+  needs; framework starts/stops radios on app switch (saves power, eliminates
+  BLE interrupt interference in apps that don't need it)
 - Backbuffer-rendered UI, no flicker, side-button (G0) shortcut to home
 - C++17 firmware; flash 46.5% used, RAM 22.0%
 

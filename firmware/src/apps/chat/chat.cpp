@@ -59,10 +59,29 @@ void push(const std::string& s, LineKind kind) {
 }
 
 void appendAssistant(const std::string& chunk) {
+    // Strip ANSI escape sequences — same state machine as ssh.cpp.
+    // State persists across chunks in case a sequence is split at a boundary.
+    static int ansiState = 0;
+    std::string clean;
+    clean.reserve(chunk.size());
+    for (char c : chunk) {
+        if (ansiState == 1) {
+            ansiState = (c == '[' || c == '(' || c == ')') ? 2 : 0;
+            continue;
+        }
+        if (ansiState == 2) {
+            if (c >= '@' && c <= '~') ansiState = 0;
+            continue;
+        }
+        if (c == 0x1B) { ansiState = 1; continue; }
+        if (c == '\r') continue;
+        clean.push_back(c);
+    }
+
     if (g_lines.empty() || g_lines.back().kind != LineKind::Assistant) {
-        g_lines.push_back({chunk, LineKind::Assistant});
+        g_lines.push_back({clean, LineKind::Assistant});
     } else {
-        g_lines.back().text += chunk;
+        g_lines.back().text += clean;
     }
     while (g_lines.size() > MAX_LINES) g_lines.pop_front();
     g_dirty = true;

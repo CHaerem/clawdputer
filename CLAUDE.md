@@ -67,11 +67,14 @@ MCP / repo access.
 **A new firmware app:**
 1. Create `firmware/src/apps/<name>/<name>.cpp`.
 2. Define `static App my_app = { .id=..., .name=..., .description=..., .onEnter=..., ... };`
-3. End with `REGISTER_APP(my_app);` — registry collects it on boot.
-4. Subscribe to events in `onEnter` (`events::subscribe(...)`),
+3. Set `.services` to the bitwise OR of `SVC_BLE`, `SVC_WIFI`, `SVC_SD` the app needs.
+   The framework starts/stops radios automatically on app switch — do **not** call
+   `wifi::resume()` or `ble::resume()` manually in `onEnter`.
+4. End with `REGISTER_APP(my_app);` — registry collects it on boot.
+5. Subscribe to events in `onEnter` (`events::subscribe(...)`),
    unsubscribe in `onExit`. Filter by `e.source` to your link.
-5. `apps/home` is the launcher and picks up new apps automatically.
-6. To switch app programmatically, call `clawd_request_app(other_app)`
+6. `apps/home` is the launcher and picks up new apps automatically.
+7. To switch app programmatically, call `clawd_request_app(other_app)`
    (declared `extern` in any app .cpp); the switch is applied on the
    next loop iteration.
 
@@ -196,6 +199,16 @@ it (per cwd), not in clawdputer.
 - `claude` CLI conversation history per `CLAWD_CHAT_CWD` directory.
 - Nothing else yet. Future apps should use NVS via a small wrapper
   service when they need persistence.
+
+## Keeping docs in sync
+
+When pushing changes that affect user-facing behavior, app list, or
+architecture, update both:
+- `README.md` — user-facing: apps table, status bullets, hardware notes
+- `CLAUDE.md` — session hand-off: conventions, adding things, architecture
+
+Neither file needs every implementation detail — `README.md` describes
+*what it does*, `CLAUDE.md` describes *how to work on it*.
 
 ## When in doubt
 

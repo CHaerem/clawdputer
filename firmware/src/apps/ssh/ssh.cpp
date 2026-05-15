@@ -551,7 +551,6 @@ void render() {
 // ----------- lifecycle -----------
 
 void onEnter() {
-    wifi::resume();    // SSH always needs the radio
     g_stage = Stage::Picker;
     g_status.clear();
     g_hosts = sealed::unsealSshHosts();

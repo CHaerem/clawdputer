@@ -210,7 +210,6 @@ void render() {
 }
 
 void onEnter() {
-    wifi::resume();   // bridge may be reached over TCP if BLE is down
     g_sub = events::subscribe(onEvent);
     if (g_state == State::Idle) g_status.clear();
     if (bridge::isConnected()) {
@@ -252,7 +251,7 @@ App usage_app = {
     .id           = "usage",
     .name         = "Usage",
     .description  = "Claude activity",
-    .services     = SVC_BLE,
+    .services     = SVC_BLE | SVC_WIFI,
     .onEnter      = onEnter,
     .onExit       = onExit,
     .onTick       = onTick,
