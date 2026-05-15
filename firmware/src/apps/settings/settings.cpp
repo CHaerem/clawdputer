@@ -92,6 +92,11 @@ void actConfigureWifi() {
     else toast("wifi app not registered");
 }
 
+void actReconnectWifi() {
+    if (wifi::reconnect()) toast("WiFi reconnecting…");
+    else toast("no saved WiFi");
+}
+
 void actToggleAudio() {
     bool v = !settings::audioEnabled();
     settings::setAudioEnabled(v);
@@ -114,6 +119,22 @@ void actToggleAutoUpdate() {
     bool v = !settings::autoUpdateEnabled();
     settings::setAutoUpdateEnabled(v);
     toast(v ? "auto-update: on (5 min)" : "auto-update: off (manual only)");
+}
+
+void actToggleReport() {
+    if (!settings::reportAvailable()) {
+        toast("no PAT compiled in");
+        return;
+    }
+    bool v = !settings::reportEnabled();
+    settings::setReportEnabled(v);
+    toast(v ? "crash reports: on" : "crash reports: off");
+}
+
+void actReportIssue() {
+    const App* a = registry::find("report");
+    if (a) clawd_request_app(a);
+    else toast("report app not found");
 }
 
 bool g_showPubkey  = false;
@@ -193,6 +214,7 @@ void rebuild() {
     // ── NETWORK ──
     g_items.push_back(hdr("NETWORK"));
     g_items.push_back(act("configure WiFi",    actConfigureWifi));
+    g_items.push_back(act("reconnect WiFi",    actReconnectWifi));
     g_items.push_back(act("clear WiFi creds",  actClearWifi));
     g_items.push_back(act("clear BLE bonds",   actClearBonds));
 
@@ -210,6 +232,11 @@ void rebuild() {
     g_items.push_back(tog("auto-update",
         settings::autoUpdateEnabled() ? std::string("every 5 min") : std::string("manual only"),
         actToggleAutoUpdate));
+    if (settings::reportAvailable()) {
+        g_items.push_back(tog("crash reports",
+            settings::reportEnabled() ? std::string("on") : std::string("off"),
+            actToggleReport));
+    }
 
     // ── UPDATES ──
     g_items.push_back(hdr("UPDATES"));
@@ -218,6 +245,9 @@ void rebuild() {
 
     // ── SYSTEM ──
     g_items.push_back(hdr("SYSTEM"));
+    if (settings::reportEnabled()) {
+        g_items.push_back(act("report a problem →", actReportIssue));
+    }
     g_items.push_back(act("reboot device",    actReboot));
     g_items.push_back(act("sleep (G0 wakes)", actSleepNow));
 }
@@ -441,7 +471,7 @@ App settings_app = {
     .id          = "settings",
     .name        = "Settings",
     .description = "Info & actions",
-    .services    = SVC_WIFI,
+    .services    = SVC_WIFI | SVC_CANVAS,
     .onEnter     = onEnter,
     .onExit      = onExit,
     .onTick      = onTick,

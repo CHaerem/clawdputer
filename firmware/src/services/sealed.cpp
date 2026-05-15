@@ -29,6 +29,43 @@ const char* intern(const std::string& s) {
 
 namespace sealed {
 
+namespace {
+
+// Generic AES-256-GCM decrypt helper for any sealed blob. Returns true on
+// success and fills `out` with the plaintext bytes.
+bool gcmDecrypt(const uint8_t* blob, size_t blobLen, std::vector<uint8_t>& out) {
+    if (blobLen < 12 + 16) return false;
+    const uint8_t* nonce = &blob[0];
+    const uint8_t* ct    = &blob[12];
+    size_t         ctLen = blobLen - 12 - 16;
+    const uint8_t* tag   = &blob[12 + ctLen];
+
+    out.assign(ctLen, 0);
+
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES,
+                                identity::sealKey(), 256);
+    if (rc != 0) {
+        Serial.printf("[sealed] gcm_setkey failed %d\n", rc);
+        mbedtls_gcm_free(&gcm);
+        return false;
+    }
+    rc = mbedtls_gcm_auth_decrypt(&gcm, ctLen,
+                                  nonce, 12,
+                                  nullptr, 0,
+                                  tag, 16,
+                                  ct, out.data());
+    mbedtls_gcm_free(&gcm);
+    if (rc != 0) {
+        Serial.printf("[sealed] gcm_auth_decrypt failed %d (key mismatch?)\n", rc);
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
 std::vector<SshHost> unsealSshHosts() {
     g_strings.clear();
     std::vector<SshHost> out;
@@ -38,36 +75,9 @@ std::vector<SshHost> unsealSshHosts() {
         return out;
     }
 
-    // Sealed format: nonce(12) || ciphertext || tag(16)
-    if (kSshHostsSealedLen < 12 + 16) {
-        Serial.println("[sealed] ssh_hosts blob too small");
-        return out;
-    }
-
-    const uint8_t* nonce = &kSshHostsSealed[0];
-    const uint8_t* ct    = &kSshHostsSealed[12];
-    size_t         ctLen = kSshHostsSealedLen - 12 - 16;
-    const uint8_t* tag   = &kSshHostsSealed[12 + ctLen];
-
-    std::vector<uint8_t> pt(ctLen);
-
-    mbedtls_gcm_context gcm;
-    mbedtls_gcm_init(&gcm);
-    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES,
-                                identity::sealKey(), 256);
-    if (rc != 0) {
-        Serial.printf("[sealed] gcm_setkey failed %d\n", rc);
-        mbedtls_gcm_free(&gcm);
-        return out;
-    }
-    rc = mbedtls_gcm_auth_decrypt(&gcm, ctLen,
-                                  nonce, 12,
-                                  nullptr, 0,
-                                  tag, 16,
-                                  ct, pt.data());
-    mbedtls_gcm_free(&gcm);
-    if (rc != 0) {
-        Serial.printf("[sealed] gcm_auth_decrypt failed %d (key mismatch?)\n", rc);
+    std::vector<uint8_t> pt;
+    if (!gcmDecrypt(kSshHostsSealed, kSshHostsSealedLen, pt)) {
+        Serial.println("[sealed] ssh_hosts decrypt failed");
         return out;
     }
 
@@ -91,6 +101,32 @@ std::vector<SshHost> unsealSshHosts() {
         out.push_back(h);
     }
     return out;
+}
+
+std::string unsealGithubPat() {
+    static std::string cached;
+    static bool        attempted = false;
+    if (attempted) return cached;
+    attempted = true;
+
+    if (kGithubPatSealedLen == 0) {
+        Serial.println("[sealed] no github_pat.sealed embedded");
+        return cached;
+    }
+    std::vector<uint8_t> pt;
+    if (!gcmDecrypt(kGithubPatSealed, kGithubPatSealedLen, pt)) {
+        Serial.println("[sealed] github_pat decrypt failed");
+        return cached;
+    }
+    cached.assign((const char*)pt.data(), pt.size());
+    while (!cached.empty() &&
+           (cached.back() == '\n' || cached.back() == '\r' ||
+            cached.back() == ' '  || cached.back() == '\t')) {
+        cached.pop_back();
+    }
+    Serial.printf("[sealed] github_pat unsealed (%u chars)\n",
+                  (unsigned)cached.size());
+    return cached;
 }
 
 }  // namespace sealed

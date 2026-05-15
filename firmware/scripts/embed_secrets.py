@@ -15,6 +15,7 @@ OUT_HEADER  = PROJECT_DIR / "src" / "secrets" / "sealed_blobs.h"
 
 KNOWN_BLOBS = {
     "ssh_hosts.sealed": ("kSshHostsSealed", "kSshHostsSealedLen"),
+    "github_pat.sealed": ("kGithubPatSealed", "kGithubPatSealedLen"),
 }
 
 
