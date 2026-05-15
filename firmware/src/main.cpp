@@ -165,7 +165,10 @@ void setup() {
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
     // Touching ui::display() triggers the canvas allocation so we know up
-    // front whether the backbuffer is available.
+    // front whether the backbuffer is available. Allocated first because
+    // the sprite needs a single large contiguous heap block — once BLE
+    // and WiFi have run their begin(), the heap is fragmented enough
+    // that the canvas alloc may fail even with plenty of total bytes.
     (void)ui::display();
 
     power::begin();

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 
 #include "core/event_bus.h"
 
@@ -59,9 +60,20 @@ void begin() {
     prefs.end();
 
     if (ssid.isEmpty()) {
-        Serial.println("[wifi] no credentials in NVS — skipping");
-        return;
+        Serial.println("[wifi] no credentials in NVS — radio up, scan-only");
     }
+
+    // Pre-init the WiFi driver with a minimum buffer config. NimBLE has
+    // already taken its share of the heap, and the Arduino default config
+    // (10 static + 32 dynamic RX buffers, ~67 KB) won't fit in what's
+    // left, so WiFi.mode(STA) below would otherwise fail with NO_MEM.
+    wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
+    wcfg.static_rx_buf_num  = 2;
+    wcfg.dynamic_rx_buf_num = 0;
+    wcfg.dynamic_tx_buf_num = 8;
+    esp_err_t werr = esp_wifi_init(&wcfg);
+    Serial.printf("[wifi] esp_wifi_init rc=%d (heap=%u)\n",
+                  werr, (unsigned)ESP.getFreeHeap());
 
     g_enabled = true;
     g_ssid    = ssid.c_str();
@@ -72,8 +84,10 @@ void begin() {
     // mild added latency on incoming packets. Both are acceptable for our
     // mostly-interactive workload.
     WiFi.setSleep(WIFI_PS_MIN_MODEM);
-    WiFi.begin(ssid.c_str(), pass.c_str());
-    Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
+    if (!ssid.isEmpty()) {
+        WiFi.begin(ssid.c_str(), pass.c_str());
+        Serial.printf("[wifi] connecting to %s\n", ssid.c_str());
+    }
 }
 
 bool isConnected() { return g_enabled && g_connected; }
