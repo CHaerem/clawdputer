@@ -258,22 +258,45 @@ void render() {
     if (g_selected >= max_rows) top = g_selected - max_rows + 1;
 
     for (int i = top; i < (int)g_items.size() && i < top + max_rows; i++) {
-        bool selected = i == g_selected;
+        const auto& item   = g_items[i];
+        bool selected      = i == g_selected;
+        bool isAction      = item.action != nullptr;
+        bool isToggle      = isAction && !item.value.empty();   // toggle = action + state
+        bool isPureAction  = isAction && item.value.empty();
+        bool isToggleOn    = isToggle && (item.value == "on" ||
+                                          item.value == "every 5 min");
+
         if (selected) d.fillRoundRect(2, y - 1, SCREEN_W - 4, row_h, 2, 0x18E3);
 
+        // Label
         d.setCursor(6, y + 1);
-        d.setTextColor(selected ? 0xFFE0 : 0x8C71);
-        d.print(g_items[i].label.c_str());
+        d.setTextColor(selected ? 0xFFE0 : 0xC618);
+        d.print(item.label.c_str());
 
-        d.setCursor(110, y + 1);
-        bool action = g_items[i].action != nullptr;
-        if (action) {
-            d.setTextColor(selected ? 0xFFFF : 0xFFE0);
-            d.print("enter \xC3\xAB");
+        // Value area at right — different styling per row kind so the
+        // currently-applied state is unambiguous at a glance.
+        int valX = SCREEN_W - 88;
+        if (isToggle) {
+            // Pill-style "on"/"off" with a coloured fill so applied state
+            // jumps out without reading text.
+            uint16_t pillBg = isToggleOn ? 0x0420 : 0x2104;  // dark green / grey
+            uint16_t pillFg = isToggleOn ? 0x07E0 : 0x8C71;  // bright / dim
+            int pillW = (int)item.value.size() * 6 + 8;
+            if (pillW < 28) pillW = 28;
+            d.fillRoundRect(valX, y, pillW, row_h - 1, 3, pillBg);
+            d.setCursor(valX + 4, y + 1);
+            d.setTextColor(pillFg);
+            d.print(item.value.c_str());
+        } else if (isPureAction) {
+            d.setCursor(valX, y + 1);
+            d.setTextColor(selected ? 0xFFE0 : 0x8C71);
+            d.print(selected ? "press \xC3\xAB" : "      \xC3\xAB");
         } else {
+            // Read-only info: just the value, no chrome.
+            d.setCursor(valX, y + 1);
             d.setTextColor(selected ? 0xFFFF : WHITE);
-            std::string v = g_items[i].value;
-            if (v.size() > 22) v = v.substr(0, 21) + "…";
+            std::string v = item.value;
+            if (v.size() > 14) v = v.substr(0, 13) + "…";
             d.print(v.c_str());
         }
         y += row_h;
