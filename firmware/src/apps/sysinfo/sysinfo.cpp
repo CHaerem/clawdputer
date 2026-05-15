@@ -6,6 +6,7 @@
 
 #include "core/app.h"
 #include "services/ble.h"
+#include "services/bridge.h"
 #include "services/updater.h"
 #include "services/wifi.h"
 #include "ui/canvas.h"
@@ -64,9 +65,19 @@ void render() {
             ble::isConnected(EventSource::NusLink) ? "connected" : "—",
             ble::isConnected(EventSource::NusLink) ? 0x07E0 : 0x4208);
 
-    drawRow(y, "bridge",
-            ble::isConnected(EventSource::BridgeLink) ? "connected" : "—",
-            ble::isConnected(EventSource::BridgeLink) ? 0x07E0 : 0x4208);
+    // Show which transport the bridge is actually using right now — BLE in
+    // the room, TCP when only WiFi reaches the host, or — when the daemon
+    // isn't reachable at all.
+    auto t = bridge::activeTransport();
+    const char* transportLabel =
+        (t == bridge::Transport::Ble) ? "BLE" :
+        (t == bridge::Transport::Tcp) ? "TCP (WiFi)" :
+                                        "—";
+    uint16_t transportColor =
+        (t == bridge::Transport::Ble) ? 0x07E0 :
+        (t == bridge::Transport::Tcp) ? 0xFD20 :
+                                        0x4208;
+    drawRow(y, "bridge", transportLabel, transportColor);
 
     if (wifi::isConnected()) {
         drawRow(y, "wifi", wifi::ip().c_str(), 0x07E0);
