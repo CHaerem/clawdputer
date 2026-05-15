@@ -19,7 +19,11 @@ constexpr uint32_t DIM_AFTER_MS     = 60000;
 constexpr uint32_t OFF_AFTER_MS     = 180000;
 constexpr uint32_t PANEL_SLEEP_MS   = 600000;   // 10 min
 constexpr uint32_t WIFI_PAUSE_MS    = 300000;   // 5 min
-constexpr uint32_t DEEP_SLEEP_MS    = 3600000;  // 60 min — auto deep-sleep
+// Auto deep-sleep on idle is disabled — Chris normally turns the device
+// off with the physical power switch, so we shouldn't trigger an
+// unexpected sleep state when he steps away for an hour. Critical-
+// battery deep-sleep and the manual "sleep now" action remain.
+constexpr uint32_t DEEP_SLEEP_MS    = 0;
 
 constexpr uint16_t DELAY_ACTIVE_MS = 20;
 constexpr uint16_t DELAY_IDLE_MS   = 60;
@@ -160,8 +164,8 @@ void tick() {
         deepSleep();
     }
 
-    if (idleMs >= DEEP_SLEEP_MS) {
-        Serial.println("[power] 60 min idle — auto deep-sleep");
+    if (DEEP_SLEEP_MS > 0 && idleMs >= DEEP_SLEEP_MS) {
+        Serial.println("[power] long idle — auto deep-sleep");
         deepSleep();
     }
 }
