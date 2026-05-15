@@ -25,9 +25,14 @@ constexpr uint32_t WIFI_PAUSE_MS    = 300000;   // 5 min
 // battery deep-sleep and the manual "sleep now" action remain.
 constexpr uint32_t DEEP_SLEEP_MS    = 0;
 
+// Keyboard polling needs frequent ticks — anything slower than ~25 Hz
+// drops short keypresses. Adaptive scaling was tried (20/60/150 ms) but
+// the longer delays meant keys went missing when the user came back to
+// an idle device. The other savings (WiFi pause, backlight, panel
+// sleep) dwarf what the loop-delay would have saved anyway.
 constexpr uint16_t DELAY_ACTIVE_MS = 20;
-constexpr uint16_t DELAY_IDLE_MS   = 60;
-constexpr uint16_t DELAY_DEEP_MS   = 150;
+constexpr uint16_t DELAY_IDLE_MS   = 20;
+constexpr uint16_t DELAY_DEEP_MS   = 20;
 
 constexpr int BATTERY_CRITICAL_PCT       = 5;
 constexpr uint32_t BATTERY_CONFIRM_MS    = 10000;   // sustained for 10 s
