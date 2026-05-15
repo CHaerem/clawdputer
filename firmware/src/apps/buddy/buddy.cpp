@@ -11,6 +11,9 @@
 
 #include "core/app.h"
 #include "core/event_bus.h"
+#include "core/registry.h"
+
+extern void clawd_request_app(const App* app);
 #include "services/audio.h"
 #include "services/ble.h"
 #include "services/imu.h"
@@ -298,7 +301,7 @@ void render() {
     d.drawFastHLine(0, 124, SCREEN_W, 0x2945);
     d.setTextColor(0x8C71);
     d.setCursor(4, 127);
-    d.printf("a:%u d:%u  tab: home", (unsigned)g_approvals, (unsigned)g_denials);
+    d.printf("a:%u d:%u  u:usage  tab:home", (unsigned)g_approvals, (unsigned)g_denials);
 
     ui::flush();
 }
@@ -481,7 +484,14 @@ void onTick() {
 }
 
 void onKey(char ch) {
-    if (g_promptId.length() == 0) return;
+    // 'u' navigates to the usage stats screen.
+    if (g_promptId.length() == 0) {
+        if (ch == 'u' || ch == 'U') {
+            const App* a = registry::find("usage");
+            if (a) clawd_request_app(a);
+        }
+        return;
+    }
     bool fast = (millis() - g_promptAt) < 5000;
     if (ch == '\n' || ch == 'y' || ch == 'Y') {
         sendPermission(g_promptId, "once");

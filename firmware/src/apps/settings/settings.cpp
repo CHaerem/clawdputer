@@ -1,6 +1,4 @@
-// Settings app — actions and read-only diagnostics. Up/Down to move,
-// Enter to invoke the selected action. Read-only rows are skipped during
-// navigation.
+// Settings app — organised into sections. Up/Down to move, Enter to invoke.
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
@@ -30,8 +28,9 @@ namespace {
 
 struct Item {
     std::string label;
-    std::string value;       // empty if action-only
-    void (*action)();        // nullptr for read-only rows
+    std::string value;
+    void (*action)() = nullptr;
+    bool isHeader    = false;
 };
 
 std::vector<Item> g_items;
@@ -41,9 +40,23 @@ std::string g_toast;
 uint32_t    g_toastUntil = 0;
 
 void toast(const std::string& msg) {
-    g_toast       = msg;
-    g_toastUntil  = millis() + 2500;
-    g_dirty       = true;
+    g_toast      = msg;
+    g_toastUntil = millis() + 2500;
+    g_dirty      = true;
+}
+
+// ── actions ─────────────────────────────────────────────────────────────────
+
+void actGoSysinfo() {
+    const App* a = registry::find("sysinfo");
+    if (a) clawd_request_app(a);
+    else toast("sysinfo not found");
+}
+
+void actGoBattery() {
+    const App* a = registry::find("battery");
+    if (a) clawd_request_app(a);
+    else toast("battery not found");
 }
 
 void actClearBonds() {
@@ -60,7 +73,7 @@ void actReboot() {
 void actSleepNow() {
     toast("deep-sleep — press G0 to wake");
     delay(800);
-    power::deepSleep();   // never returns
+    power::deepSleep();
 }
 
 void actCheckUpdate() {
@@ -103,13 +116,15 @@ void actToggleAutoUpdate() {
     toast(v ? "auto-update: on (5 min)" : "auto-update: off (manual only)");
 }
 
-bool g_showPubkey = false;
+bool g_showPubkey  = false;
 bool g_showSealKey = false;
+bool g_showInstall = false;
 int  g_pubkeyScroll = 0;
 
 void actShowPubkey() {
     g_showPubkey   = true;
     g_showSealKey  = false;
+    g_showInstall  = false;
     g_pubkeyScroll = 0;
     g_dirty        = true;
 }
@@ -117,11 +132,10 @@ void actShowPubkey() {
 void actShowSealKey() {
     g_showSealKey  = true;
     g_showPubkey   = false;
+    g_showInstall  = false;
     g_pubkeyScroll = 0;
     g_dirty        = true;
 }
-
-bool g_showInstall = false;
 
 void actShowInstall() {
     g_showInstall  = true;
@@ -131,62 +145,111 @@ void actShowInstall() {
     g_dirty        = true;
 }
 
+// ── item list ────────────────────────────────────────────────────────────────
+
 void rebuild() {
     g_items.clear();
-    g_items.push_back({"device",     ble::deviceName(),                                          nullptr});
-    g_items.push_back({"buddy",      ble::isConnected(EventSource::NusLink)   ? "connected" : "—", nullptr});
-    g_items.push_back({"bridge",     ble::isConnected(EventSource::BridgeLink)? "connected" : "—", nullptr});
-    g_items.push_back({"wifi ssid",  wifi::ssid().empty() ? std::string("(unset)") : wifi::ssid(), nullptr});
-    g_items.push_back({"wifi ip",    wifi::isConnected() ? wifi::ip() : std::string("—"),         nullptr});
-    g_items.push_back({"build",      updater::currentVersion(),                                   nullptr});
 
-    std::string ver = updater::latestVersion();
-    std::string latestStr = ver.empty()
-        ? std::string(updater::statusText())
-        : (ver + std::string(" (") + updater::statusText() + ")");
-    g_items.push_back({"latest",     latestStr,                                                   nullptr});
+    auto hdr = [](const char* label) {
+        Item it;
+        it.label    = label;
+        it.isHeader = true;
+        return it;
+    };
+    auto info = [](const char* label, std::string value) {
+        Item it;
+        it.label  = label;
+        it.value  = value;
+        return it;
+    };
+    auto act = [](const char* label, void (*fn)()) {
+        Item it;
+        it.label  = label;
+        it.action = fn;
+        return it;
+    };
+    auto tog = [](const char* label, std::string value, void (*fn)()) {
+        Item it;
+        it.label  = label;
+        it.value  = value;
+        it.action = fn;
+        return it;
+    };
 
-#ifdef CLAWD_OTA_PASSWORD
-    g_items.push_back({"ota password", "set",                                                    nullptr});
-#else
-    g_items.push_back({"ota password", "(unset)",                                                nullptr});
-#endif
-    g_items.push_back({"ssh pubkey fp", identity::fingerprint().empty() ? std::string("—") : identity::fingerprint(), nullptr});
-    g_items.push_back({"show SSH pubkey",  "",                                                  actShowPubkey});
-    g_items.push_back({"show seal key",    "",                                                  actShowSealKey});
-    g_items.push_back({"bridge install cmd","",                                                  actShowInstall});
-    g_items.push_back({"audio",             settings::audioEnabled() ? std::string("on") : std::string("off"), actToggleAudio});
-    g_items.push_back({"pet face",          settings::petEnabled()   ? std::string("on") : std::string("off"), actTogglePet});
-    g_items.push_back({"shake → dizzy",     settings::shakeEnabled() ? std::string("on") : std::string("off"), actToggleShake});
-    g_items.push_back({"auto-update",       settings::autoUpdateEnabled() ? std::string("every 5 min") : std::string("manual only"), actToggleAutoUpdate});
-    g_items.push_back({"configure WiFi",    "",                                                  actConfigureWifi});
-    g_items.push_back({"check for updates", "",                                                  actCheckUpdate});
-    g_items.push_back({"clear WiFi creds",  "",                                                  actClearWifi});
-    g_items.push_back({"clear BLE bonds",   "",                                                  actClearBonds});
-    g_items.push_back({"reboot device",     "",                                                  actReboot});
-    g_items.push_back({"sleep (G0 wakes)",  "",                                                  actSleepNow});
+    // ── DEVICE ──
+    g_items.push_back(hdr("DEVICE"));
+    g_items.push_back(act("Device info →", actGoSysinfo));
+    g_items.push_back(act("Battery →",     actGoBattery));
 
-    if (g_selected >= (int)g_items.size()) g_selected = (int)g_items.size() - 1;
-    if (g_selected < 0) g_selected = 0;
+    // ── IDENTITY ──
+    g_items.push_back(hdr("IDENTITY"));
+    g_items.push_back(info("device",       ble::deviceName()));
+    g_items.push_back(info("SSH pubkey fp",
+        identity::fingerprint().empty() ? std::string("—") : identity::fingerprint()));
+    g_items.push_back(act("show SSH pubkey",   actShowPubkey));
+    g_items.push_back(act("show seal key",     actShowSealKey));
+    g_items.push_back(act("bridge install cmd",actShowInstall));
+
+    // ── NETWORK ──
+    g_items.push_back(hdr("NETWORK"));
+    g_items.push_back(act("configure WiFi",    actConfigureWifi));
+    g_items.push_back(act("clear WiFi creds",  actClearWifi));
+    g_items.push_back(act("clear BLE bonds",   actClearBonds));
+
+    // ── PREFERENCES ──
+    g_items.push_back(hdr("PREFERENCES"));
+    g_items.push_back(tog("audio",
+        settings::audioEnabled() ? std::string("on") : std::string("off"),
+        actToggleAudio));
+    g_items.push_back(tog("pet face",
+        settings::petEnabled()   ? std::string("on") : std::string("off"),
+        actTogglePet));
+    g_items.push_back(tog("shake → dizzy",
+        settings::shakeEnabled() ? std::string("on") : std::string("off"),
+        actToggleShake));
+    g_items.push_back(tog("auto-update",
+        settings::autoUpdateEnabled() ? std::string("every 5 min") : std::string("manual only"),
+        actToggleAutoUpdate));
+
+    // ── UPDATES ──
+    g_items.push_back(hdr("UPDATES"));
+    g_items.push_back(info("build", updater::currentVersion()));
+    g_items.push_back(act("check for updates", actCheckUpdate));
+
+    // ── SYSTEM ──
+    g_items.push_back(hdr("SYSTEM"));
+    g_items.push_back(act("reboot device",    actReboot));
+    g_items.push_back(act("sleep (G0 wakes)", actSleepNow));
 }
 
-bool isAction(int idx) {
-    return idx >= 0 && idx < (int)g_items.size() && g_items[idx].action != nullptr;
+void clampSelection() {
+    int n = (int)g_items.size();
+    if (n == 0) return;
+    if (g_selected >= n) g_selected = n - 1;
+    if (g_selected < 0)  g_selected = 0;
+    if (!g_items[g_selected].isHeader) return;
+    // Find the nearest selectable row below, then above.
+    for (int i = g_selected + 1; i < n; i++) {
+        if (!g_items[i].isHeader) { g_selected = i; return; }
+    }
+    for (int i = g_selected - 1; i >= 0; i--) {
+        if (!g_items[i].isHeader) { g_selected = i; return; }
+    }
 }
 
 void moveSelection(int dir) {
     if (g_items.empty()) return;
     int n = (int)g_items.size();
     int next = g_selected;
-    for (int i = 0; i < n; i++) {
+    for (int attempts = 0; attempts < n; attempts++) {
         next = (next + dir + n) % n;
-        // Allow stopping on any row, but prefer actions when there are actions
-        // available. For simplicity: stop on every row.
-        break;
+        if (!g_items[next].isHeader) break;
     }
     g_selected = next;
     g_dirty    = true;
 }
+
+// ── rendering ────────────────────────────────────────────────────────────────
 
 void renderScrollable(const char* title, uint16_t titleColor,
                       const std::string& body, uint16_t bodyColor) {
@@ -199,9 +262,9 @@ void renderScrollable(const char* title, uint16_t titleColor,
     d.setCursor(6, ui::statusbar::HEIGHT + 3);
     d.print(title);
 
-    int y = ui::statusbar::HEIGHT + 16;
+    int y        = ui::statusbar::HEIGHT + 16;
     int maxChars = 38;
-    int lineH = 9;
+    int lineH    = 9;
     int linesShown = 0;
     int maxLines = (124 - y) / lineH;
     int line = 0;
@@ -243,6 +306,7 @@ void render() {
                          0x07E0);
         return;
     }
+
     auto& d = ui::display();
     ui::beginFrame();
     ui::statusbar::draw();
@@ -258,29 +322,34 @@ void render() {
     if (g_selected >= max_rows) top = g_selected - max_rows + 1;
 
     for (int i = top; i < (int)g_items.size() && i < top + max_rows; i++) {
-        const auto& item   = g_items[i];
-        bool selected      = i == g_selected;
-        bool isAction      = item.action != nullptr;
-        bool isToggle      = isAction && !item.value.empty();   // toggle = action + state
-        bool isPureAction  = isAction && item.value.empty();
-        bool isToggleOn    = isToggle && (item.value == "on" ||
-                                          item.value == "every 5 min");
+        const auto& item  = g_items[i];
+        bool selected     = (i == g_selected);
+
+        if (item.isHeader) {
+            // Filled dark band — visually separates sections without ambiguity.
+            d.fillRect(0, y, SCREEN_W, row_h, 0x0861);
+            d.setCursor(6, y + 2);
+            d.setTextColor(0x5AEB);
+            d.print(item.label.c_str());
+            y += row_h;
+            continue;
+        }
+
+        bool isAction     = item.action != nullptr;
+        bool isToggle     = isAction && !item.value.empty();
+        bool isPureAction = isAction && item.value.empty();
+        bool isToggleOn   = isToggle && (item.value == "on" || item.value == "every 5 min");
 
         if (selected) d.fillRoundRect(2, y - 1, SCREEN_W - 4, row_h, 2, 0x18E3);
 
-        // Label
         d.setCursor(6, y + 1);
         d.setTextColor(selected ? 0xFFE0 : 0xC618);
         d.print(item.label.c_str());
 
-        // Value area at right — different styling per row kind so the
-        // currently-applied state is unambiguous at a glance.
         int valX = SCREEN_W - 88;
         if (isToggle) {
-            // Pill-style "on"/"off" with a coloured fill so applied state
-            // jumps out without reading text.
-            uint16_t pillBg = isToggleOn ? 0x0420 : 0x2104;  // dark green / grey
-            uint16_t pillFg = isToggleOn ? 0x07E0 : 0x8C71;  // bright / dim
+            uint16_t pillBg = isToggleOn ? 0x0420 : 0x2104;
+            uint16_t pillFg = isToggleOn ? 0x07E0 : 0x8C71;
             int pillW = (int)item.value.size() * 6 + 8;
             if (pillW < 28) pillW = 28;
             d.fillRoundRect(valX, y, pillW, row_h - 1, 3, pillBg);
@@ -292,7 +361,7 @@ void render() {
             d.setTextColor(selected ? 0xFFE0 : 0x8C71);
             d.print(selected ? "press \xC3\xAB" : "      \xC3\xAB");
         } else {
-            // Read-only info: just the value, no chrome.
+            // Read-only info value.
             d.setCursor(valX, y + 1);
             d.setTextColor(selected ? 0xFFFF : WHITE);
             std::string v = item.value;
@@ -318,8 +387,11 @@ void render() {
     ui::flush();
 }
 
+// ── lifecycle ────────────────────────────────────────────────────────────────
+
 void onEnter() {
     rebuild();
+    clampSelection();
     g_dirty = true;
 }
 
@@ -341,17 +413,21 @@ void onTick() {
 
 void onKey(char ch) {
     if (g_showPubkey || g_showSealKey || g_showInstall) {
-        if (ch == key::Up && g_pubkeyScroll > 0) { g_pubkeyScroll--; g_dirty = true; }
-        else if (ch == key::Down) { g_pubkeyScroll++; g_dirty = true; }
-        else if (ch == '\n')      { g_showPubkey = false; g_showSealKey = false; g_showInstall = false; g_dirty = true; }
+        if      (ch == key::Up   && g_pubkeyScroll > 0) { g_pubkeyScroll--; g_dirty = true; }
+        else if (ch == key::Down)                        { g_pubkeyScroll++; g_dirty = true; }
+        else if (ch == '\n') {
+            g_showPubkey = g_showSealKey = g_showInstall = false;
+            g_dirty = true;
+        }
         return;
     }
-    if (ch == key::Up) {
-        moveSelection(-1);
-    } else if (ch == key::Down) {
-        moveSelection(+1);
-    } else if (ch == '\n') {
-        if (isAction(g_selected)) g_items[g_selected].action();
+    if      (ch == key::Up)   moveSelection(-1);
+    else if (ch == key::Down) moveSelection(+1);
+    else if (ch == '\n') {
+        if (g_selected >= 0 && g_selected < (int)g_items.size()) {
+            auto& item = g_items[g_selected];
+            if (!item.isHeader && item.action) item.action();
+        }
     }
 }
 

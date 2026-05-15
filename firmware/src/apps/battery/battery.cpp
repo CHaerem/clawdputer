@@ -168,6 +168,7 @@ App battery_app = {
     .onKey       = onKey,
     .onDraw      = onDraw,
     .onEvent     = nullptr,
+    .hidden      = true,
 };
 
 }  // namespace

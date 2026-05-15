@@ -22,13 +22,10 @@ and one `REGISTER_APP(...)` call.
 | App      | Description |
 |----------|-------------|
 | Home     | Coverflow launcher — `,`/`/` to rotate, Enter to launch, `G0`/`Tab` from anywhere |
-| Buddy    | Claude Desktop companion — session counts, tokens, approve/deny prompts |
+| Buddy    | Claude Desktop companion — session counts, tokens, approve/deny prompts; `u` → Usage |
 | Chat     | Type prompts on the Cardputer; bridge spawns `claude --print` and streams text back |
-| Usage    | Daily / 7d / 30d activity + cost from bridge (reads stats-cache.json + `/cost`) |
 | SSH      | WiFi SSH client with Ed25519 key auth, sealed-secrets host presets, ad-hoc add + NVS save |
-| Sysinfo  | Battery, uptime, heap, links, WiFi/IP, build SHA |
-| Settings | Device info + actions (show pubkey, show seal key, configure WiFi, check updates, …) |
-| WiFi     | Scan + connect (launched from Settings → "configure WiFi") |
+| Settings | Sections: Device info (sysinfo), Battery graph, Identity, Network, Preferences, Updates, System |
 
 ## Repo layout
 

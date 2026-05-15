@@ -127,6 +127,7 @@ App sysinfo_app = {
     .onKey       = onKey,
     .onDraw      = onDraw,
     .onEvent     = nullptr,
+    .hidden      = true,
 };
 
 }  // namespace
