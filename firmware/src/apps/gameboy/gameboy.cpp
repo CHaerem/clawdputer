@@ -3,15 +3,18 @@
 // Stages:
 //   Picker      file browser of .gb files on SD root and /roms/, plus a
 //               synthetic "[+ Download ROMs]" row that opens the downloader
-//   Sources     list of manifest URLs read from /roms/sources.txt
+//   Sources     list of manifest URLs read from /roms/sources.txt (or built-in defaults)
 //   Manifest    list of ROM URLs fetched from the selected source
 //   Playing     emulation loop; Tab exits to home (caught by main.cpp)
 //
 // On-device downloader:
-//   /roms/sources.txt   one manifest URL per line. '#' starts a comment.
-//   each manifest       one ROM URL per line. Optional "Display name | URL".
+//   /roms/sources.txt   optional: one manifest URL per line. '#' starts a comment.
+//                       if missing, built-in default sources are used (romsgames.net).
+//   each manifest       one ROM URL per line (plain text) OR HTML page with .gb links
+//   Display format:     "Display name | URL" or just "URL" (basename extracted)
+//   HTML support:       if source URL ends with '/', it's parsed as HTML (extracts href links)
 //   Downloaded files are written to /roms/<basename> and immediately appear
-//   in the picker on next entry.
+//   in the picker on next entry (requires SD card).
 //
 // Controls during play:
 //   E/S/A/D = Up/Down/Left/Right   K = B   L = A   1/Enter = Start   2 = Select
@@ -117,6 +120,117 @@ void parseManifestLine(const std::string& raw, std::string& nameOut, std::string
     if (q != std::string::npos) nameOut = nameOut.substr(0, q);
 }
 
+// Check if fetched content looks like HTML (heuristic: contains <html, <body, <!DOCTYPE, etc.)
+bool isHtmlContent(const std::string& content) {
+    std::string lower = content;
+    for (auto& c : lower) c = tolower(c);
+    return lower.find("<!doctype") != std::string::npos ||
+           lower.find("<html") != std::string::npos ||
+           lower.find("<body") != std::string::npos ||
+           lower.find("</a>") != std::string::npos;
+}
+
+// Extract href value from a tag. Handles href="...", href='...', or href=... formats.
+std::string extractHrefValue(const std::string& tag) {
+    auto hrefPos = tag.find("href");
+    if (hrefPos == std::string::npos) return "";
+    
+    size_t eqPos = tag.find('=', hrefPos);
+    if (eqPos == std::string::npos || eqPos >= tag.size()) return "";
+    
+    size_t startPos = eqPos + 1;
+    while (startPos < tag.size() && (tag[startPos] == ' ' || tag[startPos] == '\t')) startPos++;
+    
+    if (startPos >= tag.size()) return "";
+    
+    char quote = tag[startPos];
+    if (quote == '"' || quote == '\'') {
+        startPos++;
+        size_t endPos = tag.find(quote, startPos);
+        if (endPos == std::string::npos) return "";
+        return tag.substr(startPos, endPos - startPos);
+    } else {
+        // Unquoted href — find space or >
+        size_t endPos = startPos;
+        while (endPos < tag.size() && tag[endPos] != ' ' && tag[endPos] != '>') endPos++;
+        return tag.substr(startPos, endPos - startPos);
+    }
+}
+
+// Parse HTML and extract all .gb file links. Populates g_manifest.items with found ROMs.
+bool extractGbLinksFromHtml(const std::string& html, const std::string& baseUrl) {
+    g_manifest.items.clear();
+    g_manifest.selected  = 0;
+    g_manifest.scrollTop = 0;
+
+    // Find base URL's directory for relative link resolution
+    std::string baseDir = baseUrl;
+    size_t lastSlash = baseDir.find_last_of('/');
+    if (lastSlash != std::string::npos) {
+        baseDir = baseDir.substr(0, lastSlash + 1);
+    } else {
+        baseDir = baseUrl + "/";
+    }
+
+    // Search for all <a href="..."> tags
+    size_t pos = 0;
+    while ((pos = html.find("<a", pos)) != std::string::npos) {
+        size_t tagEnd = html.find(">", pos);
+        if (tagEnd == std::string::npos) { pos++; continue; }
+        
+        std::string tag = html.substr(pos, tagEnd - pos);
+        std::string href = extractHrefValue(tag);
+        
+        if (href.empty()) { pos = tagEnd + 1; continue; }
+        
+        // Only interested in .gb files
+        if (href.find(".gb") == std::string::npos) { pos = tagEnd + 1; continue; }
+        
+        // Resolve relative URLs
+        std::string fullUrl = href;
+        if (href[0] == '/') {
+            // Absolute path: use protocol + host from baseUrl
+            size_t protoEnd = baseUrl.find("://");
+            if (protoEnd != std::string::npos) {
+                size_t hostEnd = baseUrl.find('/', protoEnd + 3);
+                if (hostEnd != std::string::npos) {
+                    fullUrl = baseUrl.substr(0, hostEnd) + href;
+                }
+            }
+        } else if (href.find("://") == std::string::npos && href[0] != '#') {
+            // Relative URL: prepend base directory
+            fullUrl = baseDir + href;
+        }
+        
+        // Extract display name from URL
+        std::string displayName;
+        size_t lastSlashInUrl = fullUrl.find_last_of('/');
+        if (lastSlashInUrl != std::string::npos) {
+            displayName = fullUrl.substr(lastSlashInUrl + 1);
+        } else {
+            displayName = fullUrl;
+        }
+        
+        // Remove query parameters from display name
+        size_t qPos = displayName.find('?');
+        if (qPos != std::string::npos) displayName = displayName.substr(0, qPos);
+        
+        // Avoid duplicates
+        bool isDuplicate = false;
+        for (const auto& item : g_manifest.items) {
+            if (item.value == fullUrl) { isDuplicate = true; break; }
+        }
+        
+        if (!isDuplicate && !displayName.empty() && fullUrl.size() > 0) {
+            g_manifest.items.push_back({displayName, fullUrl});
+        }
+        
+        pos = tagEnd + 1;
+    }
+    
+    return !g_manifest.items.empty();
+}
+
 void buildFileList() {
     g_picker.items.clear();
     g_picker.selected  = 0;
@@ -151,16 +265,21 @@ void buildSourcesList() {
     g_sources.scrollTop = 0;
 
     File f = SD.open(SOURCES_PATH);
-    if (!f) return;
-    while (f.available()) {
-        std::string line = trim(std::string(f.readStringUntil('\n').c_str()));
-        if (line.empty() || line[0] == '#') continue;
-        std::string name, url;
-        parseManifestLine(line, name, url);
-        if (url.empty()) continue;
-        g_sources.items.push_back({name, url});
+    if (f) {
+        // Load custom sources from SD
+        while (f.available()) {
+            std::string line = trim(std::string(f.readStringUntil('\n').c_str()));
+            if (line.empty() || line[0] == '#') continue;
+            std::string name, url;
+            parseManifestLine(line, name, url);
+            if (url.empty()) continue;
+            g_sources.items.push_back({name, url});
+        }
+        f.close();
+    } else {
+        // Fallback: built-in default sources (works without SD card setup)
+        g_sources.items.push_back({"ROMs Games (HTML)", "https://www.romsgames.net/roms/gameboy/"});
     }
-    f.close();
 }
 
 void drawProgress(const char* title, const char* sub, int pct) {
@@ -216,22 +335,34 @@ bool fetchManifest(const std::string& url) {
     g_manifest.selected  = 0;
     g_manifest.scrollTop = 0;
 
-    size_t start = 0;
-    while (start <= body.size()) {
-        size_t nl = body.find('\n', start);
-        std::string line = trim(body.substr(start, (nl == std::string::npos ? body.size() : nl) - start));
-        if (!line.empty() && line[0] != '#') {
-            std::string name, romUrl;
-            parseManifestLine(line, name, romUrl);
-            if (!romUrl.empty()) g_manifest.items.push_back({name, romUrl});
+    // Detect if content is HTML or plain text manifest
+    if (isHtmlContent(body)) {
+        // Parse as HTML directory/listing page
+        bool ok = extractGbLinksFromHtml(body, url);
+        if (!ok) {
+            ui::toast::show("No .gb files found in HTML");
+            return false;
         }
-        if (nl == std::string::npos) break;
-        start = nl + 1;
+    } else {
+        // Parse as plain text manifest (one URL per line)
+        size_t start = 0;
+        while (start <= body.size()) {
+            size_t nl = body.find('\n', start);
+            std::string line = trim(body.substr(start, (nl == std::string::npos ? body.size() : nl) - start));
+            if (!line.empty() && line[0] != '#') {
+                std::string name, romUrl;
+                parseManifestLine(line, name, romUrl);
+                if (!romUrl.empty()) g_manifest.items.push_back({name, romUrl});
+            }
+            if (nl == std::string::npos) break;
+            start = nl + 1;
+        }
+        if (g_manifest.items.empty()) {
+            ui::toast::show("Manifest is empty");
+            return false;
+        }
     }
-    if (g_manifest.items.empty()) {
-        ui::toast::show("Manifest is empty");
-        return false;
-    }
+
     return true;
 }
 
@@ -409,8 +540,8 @@ void onTick() {
             drawListStage("Select ROM", g_picker, "No .gb files on SD card");
             return;
         case Stage::Sources:
-            drawListStage("Sources (/roms/sources.txt)", g_sources,
-                          "Add manifest URLs to /roms/sources.txt");
+            drawListStage("Sources", g_sources,
+                          "(built-ins shown; add /roms/sources.txt to customize)");
             return;
         case Stage::Manifest:
             drawListStage("Pick ROM to download", g_manifest, "(empty)");

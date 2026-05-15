@@ -1,0 +1,19 @@
+# Game Boy ROM Sources
+# 
+# Place this file as /roms/sources.txt on your microSD card.
+# One source URL per line. '#' starts a comment.
+#
+# Supported formats:
+#   - Plain text manifests: one ROM URL per line (optionally "Display | URL")
+#   - HTML directory listings: all .gb links are auto-extracted
+#
+# Examples:
+
+# HTML directory with auto-extracted .gb links
+https://www.romsgames.net/roms/gameboy/
+
+# Plain text manifests with custom names
+# https://example.com/gameboy-roms.txt | My Collection
+
+# More HTML sources
+# https://example.org/gb-games/
