@@ -179,6 +179,10 @@ void loop() {
         enter(next);
     }
     dispatchSideButton();
+    // Any keypress cancels a pending low-battery sleep countdown.
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+        if (power::lowBatteryWarning()) power::cancelLowBatteryWarning();
+    }
     dispatchKeys();
     // IMU polled at ~10 Hz instead of the full loop rate — shake events
     // are still caught reliably and we save a noticeable bit of current.
@@ -190,6 +194,30 @@ void loop() {
     }
     if (g_active && g_active->onTick) g_active->onTick();
     if (g_active && g_active->onDraw) g_active->onDraw();
+
+    // Overlay the low-battery countdown on top of whatever just rendered.
+    if (power::lowBatteryWarning()) {
+        auto& d = ui::display();
+        int boxY = 50;
+        d.fillRoundRect(20, boxY, SCREEN_W - 40, 38, 6, 0x4800);
+        d.drawRoundRect(20, boxY, SCREEN_W - 40, 38, 6, 0xFD20);
+        d.setTextSize(1);
+        d.setTextColor(0xFFFF);
+        d.setCursor(28, boxY + 6);
+        d.print("low battery — sleeping in");
+        d.setTextSize(2);
+        d.setTextColor(0xF800);
+        d.setCursor(28, boxY + 18);
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d s", power::lowBatterySecondsLeft());
+        d.print(buf);
+        d.setTextSize(1);
+        d.setTextColor(0xC618);
+        d.setCursor(120, boxY + 24);
+        d.print("any key cancels");
+        ui::flush();
+    }
+
     power::tick();
     delay(power::loopDelayMs());
 }

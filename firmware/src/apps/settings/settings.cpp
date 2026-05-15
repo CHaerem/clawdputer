@@ -13,6 +13,7 @@
 #include "core/registry.h"
 #include "services/ble.h"
 #include "services/identity.h"
+#include "services/power.h"
 #include "services/settings.h"
 #include "services/updater.h"
 #include "services/wifi.h"
@@ -54,6 +55,12 @@ void actReboot() {
     toast("rebooting…");
     delay(400);
     ESP.restart();
+}
+
+void actSleepNow() {
+    toast("deep-sleep — press G0 to wake");
+    delay(800);
+    power::deepSleep();   // never returns
 }
 
 void actCheckUpdate() {
@@ -150,6 +157,7 @@ void rebuild() {
     g_items.push_back({"clear WiFi creds",  "",                                                  actClearWifi});
     g_items.push_back({"clear BLE bonds",   "",                                                  actClearBonds});
     g_items.push_back({"reboot device",     "",                                                  actReboot});
+    g_items.push_back({"sleep (G0 wakes)",  "",                                                  actSleepNow});
 
     if (g_selected >= (int)g_items.size()) g_selected = (int)g_items.size() - 1;
     if (g_selected < 0) g_selected = 0;
