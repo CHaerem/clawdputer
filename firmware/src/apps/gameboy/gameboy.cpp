@@ -444,6 +444,7 @@ void renderFrame() {
             }
         }
     }
+    ui::flush();
 }
 
 void drawListStage(const char* title, ui::list::State& list, const char* emptyMsg) {
@@ -572,7 +573,7 @@ static App gameboy_app = {
     .id           = "gameboy",
     .name         = "Game Boy",
     .description  = "GB emulator — ROMs on SD card",
-    .services     = SVC_SD | SVC_WIFI,
+    .services     = SVC_SD | SVC_WIFI | SVC_CANVAS,
     .onEnter      = onEnter,
     .onExit       = onExit,
     .onTick       = onTick,

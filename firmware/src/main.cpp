@@ -15,6 +15,7 @@
 #include "services/audio.h"
 #include "services/ble.h"
 #include "services/bridge.h"
+#include "services/crashlog.h"
 #include "services/identity.h"
 #include "services/imu.h"
 #include "services/ota.h"
@@ -41,6 +42,12 @@ void applyServices(uint32_t needed) {
 
     if (needed & SVC_SD)   { if (sd::isPaused()) sd::resume(); }
     else                   { if (!sd::isPaused()) sd::pause(); }
+
+    // Canvas allocation order matters: do this AFTER pause() calls have freed
+    // BLE/WiFi heap, so the 32 KB sprite alloc has the best chance of finding
+    // a contiguous block. release before the new app's onEnter draws to it.
+    if (needed & SVC_CANVAS) ui::tryAcquireCanvas();
+    else                     ui::releaseCanvas();
 }
 
 void enter(const App* app) {
@@ -48,6 +55,7 @@ void enter(const App* app) {
     if (g_active && g_active->onExit) g_active->onExit();
     applyServices(app->services);
     g_active = app;
+    crashlog::noteAppEntered(app->id);
     if (g_active->onEnter) g_active->onEnter();
     Serial.printf("[clawdputer] entered app: %s\n", g_active->id);
 }
@@ -177,19 +185,32 @@ void setup() {
     imu::begin();
     updater::begin();
     identity::begin();
-    ble::begin();
+    // ble::begin() is deferred — applyServices() will reinit on first SVC_BLE
+    // app entry. Saves ~90 KB of heap during boot so the canvas alloc can
+    // grab a contiguous block.
     wifi::begin();
     sd::begin();
+    // crashlog needs sd::isAvailable() so init order is sd → crashlog.
+    crashlog::begin();
     bridge::begin();
 
     goHome();
     if (!g_active) Serial.println("[clawdputer] no apps registered — idle");
+
+    // Auto-prompt the report app when the previous boot was a crash. Done
+    // after goHome() so home renders first and the user sees the device
+    // boot normally before the prompt comes up.
+    if (crashlog::hasPriorCrash()) {
+        const App* report = findApp("report");
+        if (report) clawd_request_app(report);
+    }
 }
 
 void loop() {
     M5Cardputer.update();
     ota::tick();
     updater::tick();
+    crashlog::tick();
     clawd_bridge_tick();
     if (ota::isUpdating()) {
         delay(5);

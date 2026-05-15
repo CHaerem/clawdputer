@@ -20,6 +20,7 @@
 
 #include "settings.h"
 #include "wifi.h"
+#include "ui/canvas.h"
 
 #ifndef CLAWD_BUILD_SHA
 #define CLAWD_BUILD_SHA "unknown"
@@ -128,11 +129,28 @@ void runCheck() {
     g_status    = updater::Status::Checking;
     g_lastError = "";
 
+    // TLS handshake needs ~30 KB of *contiguous* heap. Releasing the canvas
+    // returns its 32 KB sprite as one block — exactly what mbedTLS wants.
+    bool hadCanvas = ui::canvasActive();
+    if (hadCanvas) ui::releaseCanvas();
+
+    size_t maxBlock = ESP.getMaxAllocHeap();
+    if (maxBlock < 28 * 1024) {
+        Serial.printf("[updater] skip: max heap block %u (need ~28 KB)\n",
+                      (unsigned)maxBlock);
+        if (hadCanvas) ui::tryAcquireCanvas();
+        g_lastCheckMs = millis();
+        return;
+    }
+
     WiFiClientSecure client;
     client.setInsecure();
 
     std::string latest;
-    if (!fetchManifest(client, latest)) {
+    bool ok = fetchManifest(client, latest);
+
+    if (!ok) {
+        if (hadCanvas) ui::tryAcquireCanvas();
         g_status      = updater::Status::Failed;
         g_lastCheckMs = millis();
         Serial.printf("[updater] check failed: %s\n", g_lastError.c_str());
@@ -143,6 +161,7 @@ void runCheck() {
     g_lastCheckMs = millis();
 
     if (latest == CLAWD_BUILD_SHA) {
+        if (hadCanvas) ui::tryAcquireCanvas();
         g_status = updater::Status::UpToDate;
         Serial.printf("[updater] up to date (%s)\n", latest.c_str());
         return;
@@ -240,6 +259,9 @@ void tick() {
 
     if (!wifi::isConnected()) return;
     uint32_t now = millis();
+    // Small defer after boot — gives WiFi connect scratch buffers time to
+    // free before we open a TLS socket.
+    if (now < 5000) return;
     // Forced checks always run; periodic checks only when auto-update is
     // enabled in Settings. The Settings → "check for updates" action sets
     // g_forceCheck so it works regardless of the toggle.

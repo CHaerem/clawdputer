@@ -13,4 +13,11 @@ LovyanGFX& display();
 void       beginFrame();
 void       flush();
 
+// Allocate the 8bpp double-buffer sprite. Returns true if heap permitted
+// the allocation; false → callers fall back silently to direct draw.
+// Framework calls these from applyServices() based on SVC_CANVAS.
+bool tryAcquireCanvas();
+void releaseCanvas();
+bool canvasActive();
+
 }  // namespace ui

@@ -31,4 +31,10 @@ void pause();
 void resume();
 bool isPaused();
 
+// Heavy variant: fully tear down NimBLE to release ~80 KB of heap for
+// memory-hungry apps (SSH/TLS handshakes). reinit() rebuilds via begin().
+// Any existing peer connections are dropped; the peer must reconnect.
+void deinit();
+void reinit();
+
 }  // namespace ble

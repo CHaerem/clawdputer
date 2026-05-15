@@ -271,7 +271,9 @@ App chat_app = {
     .id           = "chat",
     .name         = "Chat",
     .description  = "Claude CLI remote",
-    .services     = SVC_BLE | SVC_WIFI,
+    // Bridge primary path is TCP over WiFi (mDNS-discovered). BLE bridge
+    // service is fallback only — disabled here so canvas fits.
+    .services     = SVC_WIFI | SVC_CANVAS,
     .onEnter      = onEnter,
     .onExit       = onExit,
     .onTick       = onTick,

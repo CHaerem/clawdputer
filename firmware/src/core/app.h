@@ -9,10 +9,15 @@ using AppKeyFn       = void (*)(char ch);
 using AppEventFn     = void (*)(const Event& e);
 
 enum AppService : uint32_t {
-    SVC_NONE = 0,
-    SVC_BLE  = 1u << 0,
-    SVC_WIFI = 1u << 1,
-    SVC_SD   = 1u << 2,
+    SVC_NONE   = 0,
+    SVC_BLE    = 1u << 0,
+    SVC_WIFI   = 1u << 1,
+    SVC_SD     = 1u << 2,
+    // Double-buffered drawing via a 240×135 8bpp sprite (~32 KB heap).
+    // Apps that opt in get flicker-free updates; framework allocates the
+    // backbuffer on entry and frees it on exit. Acquisition can fail
+    // silently when there's not enough heap (NimBLE + WiFi competing).
+    SVC_CANVAS = 1u << 3,
 };
 
 struct App {

@@ -27,6 +27,7 @@
 #include "core/app.h"
 #include "core/key.h"
 #include "secrets/ssh_hosts.h"
+#include "services/ble.h"
 #include "services/bridge.h"
 #include "services/identity.h"
 #include "services/sealed.h"
@@ -560,7 +561,10 @@ void onEnter() {
     g_adhocConnected = false;
     g_dirty = true;
 }
-void onExit() { teardown(); g_stage = Stage::Picker; }
+void onExit() {
+    teardown();
+    g_stage = Stage::Picker;
+}
 
 void onTick() {
     if (g_stage == Stage::Connected) pollChannel();

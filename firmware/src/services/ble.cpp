@@ -32,7 +32,7 @@ struct Link {
 Link        g_nus(EventSource::NusLink,    "nus");
 Link        g_bridge(EventSource::BridgeLink, "bridge");
 std::string g_deviceName = "Claude-Cardputer";
-volatile bool g_paused = false;
+volatile bool g_paused = true;
 
 Link* linkForChar(NimBLECharacteristic* c) {
     if (c == g_nus.tx)    return &g_nus;
@@ -180,18 +180,33 @@ void clearBonds() { NimBLEDevice::deleteAllBonds(); }
 
 void pause() {
     if (g_paused) return;
-    NimBLEDevice::stopAdvertising();
+    deinit();
     g_paused = true;
-    Serial.println("[ble] advertising paused");
 }
 
 void resume() {
     if (!g_paused) return;
-    NimBLEDevice::startAdvertising();
+    reinit();
     g_paused = false;
-    Serial.println("[ble] advertising resumed");
 }
 
 bool isPaused() { return g_paused; }
+
+void deinit() {
+    Serial.printf("[ble] deinit (heap before=%u)\n", (unsigned)ESP.getFreeHeap());
+    NimBLEDevice::deinit(true);
+    g_nus.tx        = nullptr;
+    g_nus.connected = false;
+    g_nus.rxBuf.clear();
+    g_bridge.tx        = nullptr;
+    g_bridge.connected = false;
+    g_bridge.rxBuf.clear();
+    Serial.printf("[ble] deinit done (heap after=%u)\n", (unsigned)ESP.getFreeHeap());
+}
+
+void reinit() {
+    Serial.printf("[ble] reinit (heap before=%u)\n", (unsigned)ESP.getFreeHeap());
+    begin();
+}
 
 }  // namespace ble
