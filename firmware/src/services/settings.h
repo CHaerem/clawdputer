@@ -12,9 +12,11 @@ void begin();
 bool audioEnabled();
 bool petEnabled();
 bool shakeEnabled();
+bool autoUpdateEnabled();
 
 void setAudioEnabled(bool v);
 void setPetEnabled(bool v);
 void setShakeEnabled(bool v);
+void setAutoUpdateEnabled(bool v);
 
 }  // namespace settings

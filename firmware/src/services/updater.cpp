@@ -18,6 +18,7 @@
 #include <WiFiClientSecure.h>
 #include <esp_ota_ops.h>
 
+#include "settings.h"
 #include "wifi.h"
 
 #ifndef CLAWD_BUILD_SHA
@@ -235,9 +236,13 @@ void tick() {
 
     if (!wifi::isConnected()) return;
     uint32_t now = millis();
-    bool due = g_forceCheck || g_lastCheckMs == 0 ||
-               (now - g_lastCheckMs >= CHECK_INTERVAL_MS);
-    if (!due) return;
+    // Forced checks always run; periodic checks only when auto-update is
+    // enabled in Settings. The Settings → "check for updates" action sets
+    // g_forceCheck so it works regardless of the toggle.
+    bool periodic = settings::autoUpdateEnabled() &&
+                    (g_lastCheckMs == 0 ||
+                     now - g_lastCheckMs >= CHECK_INTERVAL_MS);
+    if (!g_forceCheck && !periodic) return;
     g_forceCheck = false;
     runCheck();
 }

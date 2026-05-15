@@ -97,6 +97,12 @@ void actToggleShake() {
     toast(v ? "shake: on" : "shake: off");
 }
 
+void actToggleAutoUpdate() {
+    bool v = !settings::autoUpdateEnabled();
+    settings::setAutoUpdateEnabled(v);
+    toast(v ? "auto-update: on (5 min)" : "auto-update: off (manual only)");
+}
+
 bool g_showPubkey = false;
 bool g_showSealKey = false;
 int  g_pubkeyScroll = 0;
@@ -152,6 +158,7 @@ void rebuild() {
     g_items.push_back({"audio",             settings::audioEnabled() ? std::string("on") : std::string("off"), actToggleAudio});
     g_items.push_back({"pet face",          settings::petEnabled()   ? std::string("on") : std::string("off"), actTogglePet});
     g_items.push_back({"shake → dizzy",     settings::shakeEnabled() ? std::string("on") : std::string("off"), actToggleShake});
+    g_items.push_back({"auto-update",       settings::autoUpdateEnabled() ? std::string("every 5 min") : std::string("manual only"), actToggleAutoUpdate});
     g_items.push_back({"configure WiFi",    "",                                                  actConfigureWifi});
     g_items.push_back({"check for updates", "",                                                  actCheckUpdate});
     g_items.push_back({"clear WiFi creds",  "",                                                  actClearWifi});
