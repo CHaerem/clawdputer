@@ -58,16 +58,16 @@ void drawUpdating(int pct) {
     d.fillScreen(BLACK);
     d.setTextSize(2);
     d.setTextColor(WHITE);
-    d.setCursor(8, 24);
+    d.setCursor(8, 8);
     d.print("UPDATING");
     d.setTextSize(1);
-    d.setCursor(8, 56);
+    d.setCursor(8, 36);
     d.printf("self-flash %d%%", pct);
-    int barX = 8, barY = 80, barW = 304, barH = 12;
+    int barX = 8, barY = 56, barW = 224, barH = 10;
     d.drawRect(barX, barY, barW, barH, WHITE);
     int fill = (int)((barW - 2) * pct / 100);
     d.fillRect(barX + 1, barY + 1, fill, barH - 2, 0x07E0);
-    d.setCursor(8, 110);
+    d.setCursor(8, 88);
     d.setTextColor(0x7BEF);
     d.print("do not unplug");
 }
