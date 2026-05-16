@@ -17,10 +17,13 @@ constexpr size_t MAX_BODY = 3500;
 
 namespace telemetry {
 
-void enqueue(const std::string& title, const std::string& body) {
+void enqueue(const std::string& title,
+             const std::string& body,
+             const std::string& label) {
     Preferences p;
     if (!p.begin(NS, false)) return;
     p.putString("title", title.c_str());
+    p.putString("label", label.c_str());
     std::string b = body;
     if (b.size() > MAX_BODY) {
         b.resize(MAX_BODY);
@@ -28,7 +31,7 @@ void enqueue(const std::string& title, const std::string& body) {
     }
     p.putString("body", b.c_str());
     p.end();
-    Serial.printf("[telemetry] queued: %s\n", title.c_str());
+    Serial.printf("[telemetry] queued (%s): %s\n", label.c_str(), title.c_str());
 }
 
 bool pending() {
@@ -42,18 +45,19 @@ bool pending() {
 void drain() {
     if (!github::hasToken()) return;
 
-    std::string title, body;
+    std::string title, body, label;
     {
         Preferences p;
         if (!p.begin(NS, true)) return;
         title = p.getString("title", "").c_str();
         body  = p.getString("body",  "").c_str();
+        label = p.getString("label", "auto-telemetry").c_str();
         p.end();
     }
     if (title.empty()) return;
 
     Serial.printf("[telemetry] draining: %s\n", title.c_str());
-    auto r = github::submitIssue(title, body, "auto-telemetry");
+    auto r = github::submitIssue(title, body, label);
     if (!r.ok) {
         Serial.printf("[telemetry] drain failed: %s (keeping queued)\n",
                       r.error.c_str());
@@ -65,6 +69,7 @@ void drain() {
     if (p.begin(NS, false)) {
         p.remove("title");
         p.remove("body");
+        p.remove("label");
         p.end();
     }
 }

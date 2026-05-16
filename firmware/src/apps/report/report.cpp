@@ -1,6 +1,8 @@
-// Report app — file a bug report or feature request directly to GitHub
-// from the device. Reachable from Settings, and auto-prompted on boot
-// when crashlog detected the previous session crashed.
+// Report app — file a bug report or feature request to GitHub from the
+// device. Submission enqueues to telemetry and reboots into recovery,
+// where the github.com TLS handshake actually fits in heap. Reachable
+// from Settings, and auto-prompted on boot when crashlog detected the
+// previous session crashed.
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
@@ -12,8 +14,8 @@
 #include "core/registry.h"
 #include "services/ble.h"
 #include "services/crashlog.h"
-#include "services/github.h"
 #include "services/sd.h"
+#include "services/telemetry.h"
 #include "services/updater.h"
 #include "services/wifi.h"
 #include "ui/canvas.h"
@@ -28,8 +30,6 @@ enum class Stage : uint8_t {
     TitleEntry,
     Confirm,
     Submitting,
-    Done,
-    Failed,
 };
 
 enum class Kind : uint8_t { Bug, Feature };
@@ -40,9 +40,6 @@ int         g_typeSel  = 0;        // 0=bug, 1=feature
 std::string g_title;
 bool        g_dirty    = true;
 bool        g_prefilled = false;
-github::SubmitResult g_result;
-
-bool g_submitPending = false;
 
 const char* kindLabel() {
     return g_kind == Kind::Bug ? "bug" : "enhancement";
@@ -178,11 +175,11 @@ void renderConfirm() {
     y += 14;
     d.setCursor(6, y);
     d.setTextColor(0x07E0);
-    d.print("enter to submit");
+    d.print("enter: submit & reboot");
     y += 10;
     d.setCursor(6, y);
     d.setTextColor(0x8C71);
-    d.print("bksp to edit title");
+    d.print("(also checks for update)");
 
     drawFooter("enter submit   bksp back   tab home");
     ui::flush();
@@ -192,53 +189,14 @@ void renderSubmitting() {
     auto& d = ui::display();
     ui::beginFrame();
     ui::statusbar::draw();
-    renderHeader("submitting…");
+    renderHeader("rebooting…");
     d.setCursor(6, 60);
     d.setTextColor(0xFFE0);
-    d.print("posting to GitHub");
+    d.print("queued, restarting");
     d.setCursor(6, 72);
     d.setTextColor(0x8C71);
-    d.print("a few seconds…");
+    d.print("recovery boot will post");
     drawFooter("");
-    ui::flush();
-}
-
-void renderDone() {
-    auto& d = ui::display();
-    ui::beginFrame();
-    ui::statusbar::draw();
-    renderHeader("submitted");
-
-    int y = ui::statusbar::HEIGHT + 22;
-    d.setCursor(6, y);
-    d.setTextColor(0x07E0);
-    char buf[32];
-    snprintf(buf, sizeof(buf), "issue #%d", g_result.issueNumber);
-    d.print(buf);
-    y += 14;
-    d.setCursor(6, y);
-    d.setTextColor(0xFFFF);
-    std::string url = g_result.issueUrl;
-    if (url.size() > 38) url = url.substr(0, 37) + "…";
-    d.print(url.c_str());
-    drawFooter("tab home");
-    ui::flush();
-}
-
-void renderFailed() {
-    auto& d = ui::display();
-    ui::beginFrame();
-    ui::statusbar::draw();
-    renderHeader("submit failed");
-
-    int y = ui::statusbar::HEIGHT + 22;
-    d.setCursor(6, y);
-    d.setTextColor(0xF800);
-    std::string e = g_result.error;
-    if (e.size() > 38) e = e.substr(0, 37) + "…";
-    d.print(e.c_str());
-
-    drawFooter("enter retry   bksp edit   tab home");
     ui::flush();
 }
 
@@ -248,15 +206,16 @@ void render() {
         case Stage::TitleEntry: renderTitleEntry(); break;
         case Stage::Confirm:    renderConfirm();    break;
         case Stage::Submitting: renderSubmitting(); break;
-        case Stage::Done:       renderDone();       break;
-        case Stage::Failed:     renderFailed();     break;
     }
 }
 
 void doSubmit() {
     g_stage = Stage::Submitting;
-    g_dirty = true;
-    g_submitPending = true;
+    render();   // paint the "rebooting…" screen synchronously
+    std::string body = buildBody();
+    telemetry::enqueue(g_title, body, kindLabel());
+    delay(600);
+    updater::scheduleRecoveryUpdate();   // never returns
 }
 
 void onEnter() {
@@ -289,14 +248,6 @@ void onTick() {
     if (now - lastBlink >= 500) {
         lastBlink = now;
         if (g_stage == Stage::TitleEntry) g_dirty = true;
-    }
-
-    if (g_submitPending) {
-        g_submitPending = false;
-        std::string body = buildBody();
-        g_result = github::submitIssue(g_title, body, kindLabel());
-        g_stage  = g_result.ok ? Stage::Done : Stage::Failed;
-        g_dirty  = true;
     }
 }
 
@@ -337,14 +288,7 @@ void onKey(char ch) {
             else if (ch == '\b') { g_stage = Stage::TitleEntry; g_dirty = true; }
             break;
 
-        case Stage::Failed:
-            if (ch == '\n')      doSubmit();
-            else if (ch == '\b') { g_stage = Stage::TitleEntry; g_dirty = true; }
-            break;
-
-        case Stage::Done:
         case Stage::Submitting:
-        default:
             break;
     }
 }

@@ -12,8 +12,10 @@
 namespace telemetry {
 
 // Overwrites any previously-queued entry. Cheap (one NVS write); call
-// from any context.
-void enqueue(const std::string& title, const std::string& body);
+// from any context. `label` is forwarded to GitHub when drained.
+void enqueue(const std::string& title,
+             const std::string& body,
+             const std::string& label = "auto-telemetry");
 
 // True iff a queued entry is waiting.
 bool pending();
