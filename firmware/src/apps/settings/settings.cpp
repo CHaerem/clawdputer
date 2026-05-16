@@ -4,6 +4,7 @@
 #include <M5Cardputer.h>
 #include <time.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -518,10 +519,11 @@ void onEnter() {
 void onExit() {}
 
 void onTick() {
-    static uint32_t lastRefresh = 0;
+    static uint32_t lastPoll = 0;
+    static uint32_t lastFingerprint = 0;
     uint32_t now = millis();
-    if (now - lastRefresh >= 1000) {
-        lastRefresh = now;
+    if (now - lastPoll >= 1000) {
+        lastPoll = now;
         auto cur = updater::status();
         if (cur != g_lastSeenStatus) {
             switch (cur) {
@@ -543,8 +545,24 @@ void onTick() {
             }
             g_lastSeenStatus = cur;
         }
-        rebuild();
-        g_dirty = true;
+        // Cheap content hash — only rebuild + redraw when something visible
+        // actually changed. Stops the per-second full repaint from causing
+        // flicker (especially when the canvas had to be released for a TLS
+        // handshake and couldn't be reacquired afterwards).
+        uint32_t epoch = updater::lastCheckEpoch();
+        uint32_t fp = (uint32_t)cur * 1315423911u;
+        fp ^= std::hash<std::string>{}(updater::latestVersion()) & 0xFFFFu;
+        fp ^= (epoch / 60u) << 8;   // bucket to one tick per minute
+        fp ^= (uint32_t)settings::autoUpdateEnabled() << 1;
+        fp ^= (uint32_t)settings::audioEnabled()      << 2;
+        fp ^= (uint32_t)settings::petEnabled()        << 3;
+        fp ^= (uint32_t)settings::shakeEnabled()      << 4;
+        fp ^= (uint32_t)settings::reportEnabled()     << 5;
+        if (fp != lastFingerprint) {
+            lastFingerprint = fp;
+            rebuild();
+            g_dirty = true;
+        }
     }
     if (!g_toast.empty() && now >= g_toastUntil) {
         g_toast.clear();

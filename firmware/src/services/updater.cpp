@@ -228,14 +228,22 @@ void runCheck(bool installIfNewer) {
 
     // TLS handshake needs ~30 KB of *contiguous* heap. Releasing the canvas
     // returns its 32 KB sprite as one block — exactly what mbedTLS wants.
+    // Skip the release entirely when the heap already has enough headroom
+    // (typical when no canvas-heavy app is running) — avoids a needless
+    // release/reacquire round-trip that briefly drops the foreground app
+    // to direct-draw and causes a visible flicker.
     bool hadCanvas = ui::canvasActive();
-    if (hadCanvas) ui::releaseCanvas();
+    bool released  = false;
+    if (hadCanvas && ESP.getMaxAllocHeap() < 32 * 1024) {
+        ui::releaseCanvas();
+        released = true;
+    }
 
     size_t maxBlock = ESP.getMaxAllocHeap();
     if (maxBlock < 28 * 1024) {
         Serial.printf("[updater] skip: max heap block %u (need ~28 KB)\n",
                       (unsigned)maxBlock);
-        if (hadCanvas) ui::tryAcquireCanvas();
+        if (released) ui::tryAcquireCanvas();
         g_lastCheckMs = millis();
         // Don't persist — this isn't a real result, just a deferred attempt.
         g_status = updater::Status::Idle;
@@ -254,7 +262,7 @@ void runCheck(bool installIfNewer) {
     }
 
     if (!ok) {
-        if (hadCanvas) ui::tryAcquireCanvas();
+        if (released) ui::tryAcquireCanvas();
         g_status = updater::Status::Failed;
         Serial.printf("[updater] check failed: %s\n", g_lastError.c_str());
         persistResult();
@@ -265,7 +273,7 @@ void runCheck(bool installIfNewer) {
     g_latestBuiltAt = builtAt;
 
     if (latest == CLAWD_BUILD_SHA) {
-        if (hadCanvas) ui::tryAcquireCanvas();
+        if (released) ui::tryAcquireCanvas();
         g_status = updater::Status::UpToDate;
         Serial.printf("[updater] up to date (%s)\n", latest.c_str());
         persistResult();
@@ -273,7 +281,7 @@ void runCheck(bool installIfNewer) {
     }
 
     if (!installIfNewer) {
-        if (hadCanvas) ui::tryAcquireCanvas();
+        if (released) ui::tryAcquireCanvas();
         g_status = updater::Status::UpdateAvailable;
         Serial.printf("[updater] update available: %s (have %s) — waiting for user\n",
                       latest.c_str(), CLAWD_BUILD_SHA);
@@ -352,8 +360,7 @@ void tick() {
     if (g_installRequested) {
         g_installRequested = false;
         if (g_status == Status::UpdateAvailable && !g_latest.empty()) {
-            bool hadCanvas = ui::canvasActive();
-            if (hadCanvas) ui::releaseCanvas();
+            if (ui::canvasActive()) ui::releaseCanvas();
             WiFiClientSecure client;
             client.setInsecure();
             runFlash(client, g_latest);
