@@ -28,11 +28,6 @@ void begin();
 // while.
 void tick();
 
-// Force a check on the next tick. (Currently unused by the UI — the
-// periodic background check is the only caller path that still uses it.
-// Manual user updates go through installNow() → recovery boot instead.)
-void checkNow();
-
 // Reboot into recovery mode and run an atomic check-and-flash there.
 // Calls scheduleRecoveryUpdate() — never returns to the caller.
 void installNow();

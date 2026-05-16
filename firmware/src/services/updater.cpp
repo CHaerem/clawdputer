@@ -1,17 +1,17 @@
-// GitOps self-update: poll the project's "latest" GitHub release for a
-// newer firmware build than the one currently running. When found, stream
-// firmware.bin into the inactive OTA partition via HTTPUpdate and reboot.
+// GitOps self-update: on user request, reboot into a minimal recovery env
+// and there fetch the project's "latest" GitHub release manifest. If newer
+// than the running build, stream firmware.bin into the inactive OTA
+// partition via HTTPUpdate and reboot into it.
 //
-// Rollback: before flashing we mark a "pending" flag in NVS. After reboot,
-// the new image must call confirmHealthy() (we do that after the device
-// has run 30s without crash). If it fails to confirm across three boot
-// attempts, we manually point esp_ota at the previous partition and
-// reset — restoring the last-known-good firmware.
+// Why recovery-boot? The stock Arduino-ESP32 2.x mbedTLS wants ~36 KB
+// contiguous heap for the github.com handshake. The Cardputer has no PSRAM
+// and a fully-booted firmware fragments internal heap below that. A fresh
+// boot that skips the canvas sprite, BLE, and apps gives ~65 KB largest
+// free block — handshake fits. See CLAUDE.md "Recovery-boot OTA".
 //
-// State persistence: the last check result (status / sha / error / epoch)
-// is written to NVS at the end of every check, so the Settings UI can
-// surface real status immediately after boot — before any new check runs
-// — and can clearly distinguish "never checked" from "checked, all good".
+// Rollback: before flashing we mark a "pending" flag in NVS. The new image
+// must run stably for HEALTH_CONFIRM_MS to clear the flag. Three failed
+// boot attempts trigger an automatic switch back to the previous partition.
 
 #include "updater.h"
 
@@ -24,10 +24,7 @@
 #include <esp_ota_ops.h>
 #include <time.h>
 
-#include "settings.h"
 #include "wifi.h"
-#include "github.h"
-#include "ui/canvas.h"
 
 #ifndef CLAWD_BUILD_SHA
 #define CLAWD_BUILD_SHA "unknown"
@@ -42,14 +39,12 @@ constexpr const char* MANIFEST_URL =
     "https://github.com/CHaerem/clawdputer/releases/latest/download/version.txt";
 constexpr const char* FIRMWARE_URL =
     "https://github.com/CHaerem/clawdputer/releases/latest/download/firmware.bin";
-constexpr uint32_t CHECK_INTERVAL_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t HEALTH_CONFIRM_MS = 30UL * 1000UL;
 constexpr int      MAX_BOOT_ATTEMPTS = 3;
 
 updater::Status g_status      = updater::Status::Idle;
 uint32_t        g_lastCheckMs = 0;
 uint32_t        g_lastCheckEpoch = 0;
-bool            g_forceCheck  = true;
 bool            g_confirmed   = false;
 std::string     g_latest;
 std::string     g_latestBuiltAt;
@@ -99,87 +94,6 @@ void persistResult() {
     prefs.end();
 }
 
-constexpr uint32_t REPORT_DEDUP_SECS = 24 * 3600;
-
-bool reportDedupAllow(const char* kind) {
-    Preferences prefs;
-    prefs.begin("updater", false);
-    // NVS keys cap at 15 chars; "rep_" + kind must fit. Strip non-alnum
-    // from kind (e.g. "check-failed" -> "checkfailed") and clamp.
-    String k;
-    for (const char* p = kind; *p && k.length() < 11; ++p) {
-        if (isalnum((unsigned char)*p)) k += *p;
-    }
-    String key = String("rep_") + k;
-    uint32_t last = prefs.getUInt(key.c_str(), 0);
-    uint32_t now  = (uint32_t)(millis() / 1000);
-    bool allow = (last == 0) || (now > last && now - last >= REPORT_DEDUP_SECS);
-    if (allow) prefs.putUInt(key.c_str(), now);
-    prefs.end();
-    return allow;
-}
-
-// File a GitHub issue for an OTA failure. Caller must have already
-// released the canvas (so TLS has the contiguous heap it needs) and is
-// responsible for reacquiring afterward. No-op when reporting is off,
-// no PAT is sealed in, WiFi is down, or this kind fired recently.
-void reportOtaFailure(const char* kind, const std::string& detail) {
-    if (!settings::reportEnabled())  return;
-    if (!github::hasToken())         return;
-    if (!wifi::isConnected())        return;
-    if (!reportDedupAllow(kind))     return;
-
-    std::string title = std::string("[ota] ") + kind + ": " + detail;
-    if (title.size() > 120) title = title.substr(0, 119) + "…";
-
-    char hdr[640];
-    snprintf(hdr, sizeof(hdr),
-             "Automated OTA failure report.\n\n"
-             "- **Kind:** `%s`\n"
-             "- **Detail:** `%s`\n"
-             "- **Installed build:** `%s` (%s)\n"
-             "- **Latest seen:** `%s` (%s)\n"
-             "- **Manifest URL:** %s\n"
-             "- **Firmware URL:** %s\n"
-             "- **Uptime:** %us\n"
-             "- **Free heap:** %u\n"
-             "- **Largest block:** %u\n\n"
-             "_Filed automatically — see `firmware/src/services/updater.cpp`._\n",
-             kind, detail.c_str(),
-             CLAWD_BUILD_SHA, CLAWD_BUILD_DATE,
-             g_latest.empty() ? "—" : g_latest.c_str(),
-             g_latestBuiltAt.empty() ? "—" : g_latestBuiltAt.c_str(),
-             MANIFEST_URL, FIRMWARE_URL,
-             (unsigned)(millis() / 1000),
-             (unsigned)ESP.getFreeHeap(),
-             (unsigned)ESP.getMaxAllocHeap());
-
-    Serial.printf("[updater] filing issue: %s\n", title.c_str());
-    auto r = github::submitIssue(title, hdr, "auto-ota");
-    if (r.ok) Serial.printf("[updater] issue #%d: %s\n",
-                            r.issueNumber, r.issueUrl.c_str());
-    else      Serial.printf("[updater] submit failed: %s\n", r.error.c_str());
-}
-
-void drawUpdating(int pct) {
-    auto& d = M5Cardputer.Display;
-    d.fillScreen(BLACK);
-    d.setTextSize(2);
-    d.setTextColor(WHITE);
-    d.setCursor(8, 8);
-    d.print("UPDATING");
-    d.setTextSize(1);
-    d.setCursor(8, 36);
-    d.printf("self-flash %d%%", pct);
-    int barX = 8, barY = 56, barW = 224, barH = 10;
-    d.drawRect(barX, barY, barW, barH, WHITE);
-    int fill = (int)((barW - 2) * pct / 100);
-    d.fillRect(barX + 1, barY + 1, fill, barH - 2, 0x07E0);
-    d.setCursor(8, 88);
-    d.setTextColor(0x7BEF);
-    d.print("do not unplug");
-}
-
 // Recovery-mode painter — header is "OTA RECOVERY" and the body shows
 // the current phase plus a progress bar. Draws directly to the LCD; never
 // touches the canvas sprite (which is what we skipped allocating to keep
@@ -203,15 +117,6 @@ void drawRecovery(const char* phase, int pct) {
     d.setCursor(8, 88);
     d.setTextColor(0x7BEF);
     d.print("do not unplug");
-}
-
-void onUpdateProgress(int cur, int total) {
-    if (total <= 0) return;
-    static int lastPct = -1;
-    int pct = (int)((int64_t)cur * 100 / total);
-    if (pct == lastPct) return;
-    lastPct = pct;
-    drawUpdating(pct);
 }
 
 void rollbackNow() {
@@ -266,92 +171,6 @@ bool fetchManifest(WiFiClientSecure& client,
         builtAtOut = second.c_str();
     }
     return true;
-}
-
-void runFlash(WiFiClientSecure& client, const std::string& target) {
-    Serial.printf("[updater] flashing %s (have %s)\n",
-                  target.c_str(), CLAWD_BUILD_SHA);
-    g_status = updater::Status::Downloading;
-    drawUpdating(0);
-
-    // Mark the upcoming partition as pending verification BEFORE the flash,
-    // so a crash mid-flash or a broken new image is recoverable.
-    {
-        Preferences prefs;
-        prefs.begin("updater", false);
-        prefs.putBool("pending", true);
-        prefs.putInt("boots", 0);
-        prefs.putString("target", target.c_str());
-        prefs.end();
-    }
-
-    httpUpdate.rebootOnUpdate(true);
-    httpUpdate.onProgress(onUpdateProgress);
-    // GitHub serves the release artifact via a 302 to objects.githubusercontent.com.
-    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    auto ret = httpUpdate.update(client, FIRMWARE_URL);
-    if (ret == HTTP_UPDATE_FAILED) {
-        g_status    = updater::Status::Failed;
-        g_lastError = httpUpdate.getLastErrorString().c_str();
-        Serial.printf("[updater] failed: %s\n", g_lastError.c_str());
-        // The download didn't complete, so the inactive partition is junk —
-        // clear the pending flag to avoid a useless rollback on next boot.
-        Preferences prefs;
-        prefs.begin("updater", false);
-        prefs.putBool("pending", false);
-        prefs.putInt("boots", 0);
-        prefs.end();
-        persistResult();
-        reportOtaFailure("flash-failed", g_lastError);
-    }
-}
-
-void runCheck(bool installIfNewer) {
-    if (!wifi::isConnected()) return;
-
-    g_status    = updater::Status::Checking;
-    g_lastError = "";
-
-    // mbedTLS allocates from PSRAM (see main.cpp), so the handshake no
-    // longer competes for the ~31 KB largest free internal block. No
-    // canvas-release or bridge-pause dance needed.
-    WiFiClientSecure client;
-    client.setInsecure();
-
-    std::string latest, builtAt;
-    bool ok = fetchManifest(client, latest, builtAt);
-
-    g_lastCheckMs = millis();
-    if (wifi::timeSynced()) g_lastCheckEpoch = (uint32_t)time(nullptr);
-
-    if (!ok) {
-        g_status = updater::Status::Failed;
-        Serial.printf("[updater] check failed: %s\n", g_lastError.c_str());
-        persistResult();
-        reportOtaFailure("check-failed", g_lastError);
-        return;
-    }
-
-    g_latest        = latest;
-    g_latestBuiltAt = builtAt;
-
-    if (latest == CLAWD_BUILD_SHA) {
-        g_status = updater::Status::UpToDate;
-        Serial.printf("[updater] up to date (%s)\n", latest.c_str());
-        persistResult();
-        return;
-    }
-
-    if (!installIfNewer) {
-        g_status = updater::Status::UpdateAvailable;
-        Serial.printf("[updater] update available: %s (have %s) — waiting for user\n",
-                      latest.c_str(), CLAWD_BUILD_SHA);
-        persistResult();
-        return;
-    }
-
-    if (ui::canvasActive()) ui::releaseCanvas();
-    runFlash(client, latest);
 }
 
 // Recovery-mode globals — used by onRecoveryProgress so the painter knows
@@ -533,32 +352,12 @@ void tick() {
         prefs.end();
         g_confirmed = true;
     }
-
-    if (!wifi::isConnected()) return;
-    uint32_t now = millis();
-
-    // Small defer after boot — gives WiFi connect scratch buffers time to
-    // free before we open a TLS socket.
-    if (now < 5000) return;
-    bool autoUpdate = settings::autoUpdateEnabled();
-    // Forced checks always run; periodic checks only when auto-update is
-    // enabled in Settings.
-    bool periodic = autoUpdate &&
-                    (g_lastCheckMs == 0 ||
-                     now - g_lastCheckMs >= CHECK_INTERVAL_MS);
-    if (!g_forceCheck && !periodic) return;
-    bool forced = g_forceCheck;
-    g_forceCheck = false;
-    // Auto-update on: flash immediately on a newer SHA (both periodic and
-    // forced checks). Auto-update off: only report; user installs via
-    // Settings → install update.
-    runCheck(autoUpdate);
-    // A user-triggered manual check with auto-update on is the same as a
-    // periodic check — both auto-flash. (forced var kept for clarity.)
-    (void)forced;
+    // Background polling of github.com is intentionally NOT done. The TLS
+    // handshake can't fit in the fragmented heap of a running firmware on
+    // this hardware (see CLAUDE.md "Recovery-boot OTA"). The only working
+    // channel is recovery-boot, triggered by the user from Settings.
 }
 
-void checkNow()   { g_forceCheck = true; }
 void installNow() { scheduleRecoveryUpdate(); }   // never returns
 
 Status      status()           { return g_status; }
