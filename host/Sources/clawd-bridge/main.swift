@@ -26,6 +26,14 @@ let tcp: TCPListener? = {
         return nil
     }
 }()
+let otaProxy: OTAProxy? = {
+    do {
+        return try OTAProxy()
+    } catch {
+        fputs("[bridge] OTA proxy failed: \(error). Device OTA will need to reach GitHub directly.\n", stderr)
+        return nil
+    }
+}()
 
 func send<T: Encodable>(_ value: T) {
     guard let line = Wire.encodeLine(value) else { return }
