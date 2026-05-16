@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>clawdputer — Cardputer demo</title>
+  <meta name="description" content="Browser preview of the clawdputer firmware running on the M5Stack Cardputer." />
+  <meta name="theme-color" content="#0f0f10" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="page-head">
+    <h1>clawdputer <span class="muted">/ web demo</span></h1>
+    <p class="subtitle">
+      Browser simulation of the firmware in
+      <a href="https://github.com/CHaerem/clawdputer">CHaerem/clawdputer</a>.
+      The 240&times;135 display is a real pixel buffer; the keyboard is wired
+      to your physical keys and to clickable on-screen keys.
+    </p>
+  </header>
+
+  <main class="stage">
+    <div class="device" id="device" role="application" aria-label="Cardputer simulator">
+      <div class="device-shell">
+        <div class="g0" id="g0btn" title="G0 side button — returns to home"></div>
+
+        <div class="screen-bezel">
+          <div class="screen-glass">
+            <canvas id="screen" width="240" height="135" aria-label="Cardputer display"></canvas>
+          </div>
+          <div class="brand">CARDPUTER</div>
+        </div>
+
+        <div class="keyboard" id="keyboard" aria-label="On-screen keyboard"></div>
+      </div>
+    </div>
+
+    <aside class="sidebar">
+      <section class="card">
+        <h2>How to drive it</h2>
+        <ul>
+          <li><kbd>,</kbd> / <kbd>/</kbd> &mdash; rotate cards in the launcher</li>
+          <li><kbd>;</kbd> <kbd>.</kbd> <kbd>,</kbd> <kbd>/</kbd> &mdash; arrow keys in menus (↑ ↓ ← →)</li>
+          <li><kbd>Enter</kbd> &mdash; launch / confirm / send</li>
+          <li><kbd>Tab</kbd> or <kbd>G0</kbd> &mdash; back to home from any app</li>
+          <li><kbd>Backspace</kbd> &mdash; delete / cancel</li>
+          <li>Type to enter text in Chat &amp; SSH inputs</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>What you're looking at</h2>
+        <ul class="apps-list">
+          <li><strong>Buddy</strong> &mdash; the Claude Desktop companion screen. After a moment it goes "connected" and a permission prompt arrives so you can press <kbd>Y</kbd> / <kbd>N</kbd>.</li>
+          <li><strong>Chat</strong> &mdash; the device-side UI for a <code>claude</code> CLI session spawned by the Mac-side bridge. Streamed responses are simulated.</li>
+          <li><strong>SSH</strong> &mdash; sealed host-preset picker.</li>
+          <li><strong>Game Boy</strong> &mdash; ROM browser (no emulator running in the demo).</li>
+          <li><strong>Settings</strong> &mdash; the same sections the real device shows.</li>
+        </ul>
+      </section>
+
+      <section class="card subtle">
+        <h2>About the simulation</h2>
+        <p>
+          The display is a 240&times;135 canvas matching the real IPS panel
+          one-to-one. Apps are reimplemented in JavaScript with the same
+          layouts and key bindings as the firmware, but BLE, WiFi, the bridge
+          daemon, and the <code>claude</code> CLI are stubbed with scripted
+          activity.
+        </p>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="page-foot">
+    <p>
+      Firmware &amp; sources: <a href="https://github.com/CHaerem/clawdputer">CHaerem/clawdputer</a>.
+      Built for the <a href="https://docs.m5stack.com/en/core/Cardputer-Adv">M5Stack Cardputer ADV</a>.
+    </p>
+  </footer>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
