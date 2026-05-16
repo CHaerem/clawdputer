@@ -185,6 +185,8 @@ void setup() {
     delay(200);
     Serial.println();
     Serial.println("[clawdputer] boot");
+    Serial.printf("[clawdputer] PSRAM size=%u free=%u\n",
+                  (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
     // Touching ui::display() triggers the canvas allocation so we know up
