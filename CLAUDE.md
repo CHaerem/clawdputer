@@ -155,11 +155,23 @@ Every push to `main` that touches `firmware/**` runs
 `firmware.bin` + `version.txt` to the `latest` GitHub release.
 
 On device, `services/updater.cpp`:
-- polls `version.txt` every 5 minutes (or on-demand via Settings)
+- only ever fetches `version.txt` and `firmware.bin` from inside a
+  recovery boot (see below) — there is no background poll, because the
+  github.com TLS handshake doesn't fit in the fragmented heap of a
+  fully-booted firmware on this hardware
 - compares the SHA against `CLAWD_BUILD_SHA` (set by
   `firmware/scripts/embed_version.py` from `git rev-parse --short HEAD`)
 - streams `firmware.bin` into the inactive OTA partition via HTTPUpdate
   when newer
+
+**TLS is recovery-boot only.** Anything that needs to reach github.com
+from this firmware — OTA, `services/github.cpp` issue submission used
+by `health.cpp` and the report app — runs against ~31 KB largest free
+block in normal operation, and mbedTLS wants ~36 KB. The report app
+gets away with it by releasing the canvas first and crossing fingers;
+`health.cpp` doesn't, so on submit failure it falls back to
+`services/telemetry.cpp` (a single NVS slot, last-wins) which the
+recovery boot drains after its own manifest fetch succeeds.
 
 **Recovery-boot OTA.** The StampS3 has no PSRAM and the prebuilt
 mbedTLS in Arduino-ESP32 2.x wants ~36 KB contiguous heap for the
@@ -171,17 +183,14 @@ flash path is a **two-reboot dance**:
 2. `main.cpp::setup()` checks `updater::isRecoveryBoot()` *before*
    the canvas sprite, BLE, or apps are initialised. If set, it calls
    `updater::runRecovery()` — a minimal flow that connects WiFi,
-   fetches the manifest, and flashes via stock `WiFiClientSecure`.
-   With a pristine heap, the largest free block is ~65 KB and the
-   TLS handshake succeeds.
+   fetches the manifest, drains any queued telemetry, and flashes via
+   stock `WiFiClientSecure`. With a pristine heap, the largest free
+   block is ~65 KB and the TLS handshake succeeds.
 3. On flash success, HTTPUpdate reboots into the new image. On no-op
    ("already up to date") or failure, the device reboots back into
    normal mode. Failure reasons are persisted in `rec_fail` and
    surfaced as `Status::Failed` / `lastError()` on the next normal
    boot.
-
-The periodic background `runCheck()` still tries direct HTTPS and
-fails — it's tolerated noise until we have a non-TLS check channel.
 
 **Rollback** is app-level (ESP-IDF's built-in rollback is not enabled
 because it requires a framework rebuild):
