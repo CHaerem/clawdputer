@@ -123,12 +123,6 @@ void actToggleShake() {
     toast(v ? "shake: on" : "shake: off");
 }
 
-void actToggleAutoUpdate() {
-    bool v = !settings::autoUpdateEnabled();
-    settings::setAutoUpdateEnabled(v);
-    toast(v ? "auto-update: on (5 min)" : "auto-update: off (manual only)");
-}
-
 void actToggleReport() {
     if (!settings::reportAvailable()) {
         toast("no PAT compiled in");
@@ -309,9 +303,6 @@ void rebuild() {
     g_items.push_back(tog("shake → dizzy",
         settings::shakeEnabled() ? std::string("on") : std::string("off"),
         actToggleShake));
-    g_items.push_back(tog("auto-update",
-        settings::autoUpdateEnabled() ? std::string("every 5 min") : std::string("manual only"),
-        actToggleAutoUpdate));
     if (settings::reportAvailable()) {
         g_items.push_back(tog("crash reports",
             settings::reportEnabled() ? std::string("on") : std::string("off"),
@@ -443,7 +434,7 @@ void render() {
         bool isAction     = item.action != nullptr;
         bool isToggle     = isAction && !item.value.empty();
         bool isPureAction = isAction && item.value.empty();
-        bool isToggleOn   = isToggle && (item.value == "on" || item.value == "every 5 min");
+        bool isToggleOn   = isToggle && (item.value == "on");
 
         if (selected) d.fillRoundRect(2, y - 1, SCREEN_W - 4, row_h, 2, 0x18E3);
 
@@ -546,7 +537,6 @@ void onTick() {
         uint32_t fp = (uint32_t)cur * 1315423911u;
         fp ^= std::hash<std::string>{}(updater::latestVersion()) & 0xFFFFu;
         fp ^= (epoch / 60u) << 8;   // bucket to one tick per minute
-        fp ^= (uint32_t)settings::autoUpdateEnabled() << 1;
         fp ^= (uint32_t)settings::audioEnabled()      << 2;
         fp ^= (uint32_t)settings::petEnabled()        << 3;
         fp ^= (uint32_t)settings::shakeEnabled()      << 4;

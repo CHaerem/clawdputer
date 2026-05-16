@@ -13,6 +13,7 @@
 #include "crashlog.h"
 #include "github.h"
 #include "settings.h"
+#include "telemetry.h"
 #include "wifi.h"
 
 #ifndef CLAWD_BUILD_SHA
@@ -151,9 +152,13 @@ void fileIssue(const char* kind, const char* trigger, const Sample& latest) {
 
     Serial.printf("[health] filing issue: %s\n", title.c_str());
     auto r = github::submitIssue(title, body, "auto-health");
-    if (r.ok) Serial.printf("[health] issue #%d: %s\n",
-                            r.issueNumber, r.issueUrl.c_str());
-    else      Serial.printf("[health] submit failed: %s\n", r.error.c_str());
+    if (r.ok) {
+        Serial.printf("[health] issue #%d: %s\n", r.issueNumber, r.issueUrl.c_str());
+    } else {
+        Serial.printf("[health] submit failed (%s) — queuing for recovery drain\n",
+                      r.error.c_str());
+        telemetry::enqueue(title, body);
+    }
 }
 
 void evaluate(const Sample& s) {

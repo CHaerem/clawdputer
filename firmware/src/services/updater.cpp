@@ -25,6 +25,7 @@
 #include <time.h>
 
 #include "wifi.h"
+#include "telemetry.h"
 
 #ifndef CLAWD_BUILD_SHA
 #define CLAWD_BUILD_SHA "unknown"
@@ -236,6 +237,15 @@ void persistRecoveryFailure(const char* reason) {
         drawRecovery("manifest failed — rebooting", -1);
         delay(2000);
         ESP.restart();
+    }
+
+    // Recovery boot is the one moment we have an unfragmented heap on this
+    // hardware, so it's also the only place github.com POSTs reliably go
+    // through. Drain any pending telemetry the running firmware couldn't
+    // file (typically a low-heap submit failure caught by health.cpp).
+    if (telemetry::pending()) {
+        drawRecovery("draining telemetry…", -1);
+        telemetry::drain();
     }
 
     if (latest == CLAWD_BUILD_SHA) {
