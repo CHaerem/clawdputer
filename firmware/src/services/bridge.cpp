@@ -113,8 +113,27 @@ Transport activeTransport() {
     return Transport::None;
 }
 
-void pause()  { g_paused = true; }
-void resume() { g_paused = false; }
+void pause() {
+    // Setting the flag isn't enough — the TCP socket and its kernel-side
+    // buffers stay allocated and fragment the heap. Close it so mbedTLS
+    // gets a contiguous block for its handshake.
+    g_paused = true;
+    if (g_tcpUp) {
+        g_tcp.stop();
+        g_tcpUp = false;
+        g_tcpRxBuf.clear();
+        std::string().swap(g_tcpRxBuf);  // release capacity, not just size
+        events::publish({EventType::LinkDisconnected, EventSource::BridgeLink, {}});
+        Serial.println("[bridge] paused (TCP closed)");
+    }
+}
+
+void resume() {
+    g_paused = false;
+    // Reset the discovery throttle so we reconnect on the next tick rather
+    // than waiting up to 30 s.
+    g_lastDiscovery = 0;
+}
 
 // Called from the main loop tick driver in main.cpp.
 void tick() {

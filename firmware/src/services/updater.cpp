@@ -27,6 +27,7 @@
 #include "settings.h"
 #include "wifi.h"
 #include "github.h"
+#include "bridge.h"
 #include "ui/canvas.h"
 
 #ifndef CLAWD_BUILD_SHA
@@ -105,7 +106,13 @@ constexpr uint32_t REPORT_DEDUP_SECS = 24 * 3600;
 bool reportDedupAllow(const char* kind) {
     Preferences prefs;
     prefs.begin("updater", false);
-    String key = String("rep_") + kind;
+    // NVS keys cap at 15 chars; "rep_" + kind must fit. Strip non-alnum
+    // from kind (e.g. "check-failed" -> "checkfailed") and clamp.
+    String k;
+    for (const char* p = kind; *p && k.length() < 11; ++p) {
+        if (isalnum((unsigned char)*p)) k += *p;
+    }
+    String key = String("rep_") + k;
     uint32_t last = prefs.getUInt(key.c_str(), 0);
     uint32_t now  = (uint32_t)(millis() / 1000);
     bool allow = (last == 0) || (now > last && now - last >= REPORT_DEDUP_SECS);
@@ -285,7 +292,19 @@ void runCheck(bool installIfNewer) {
     g_status    = updater::Status::Checking;
     g_lastError = "";
 
-    // TLS handshake needs ~30 KB of *contiguous* heap. Releasing the canvas
+    // Pause the bridge link for the duration of the check — its TCP socket
+    // and mDNS poller hold buffers that fragment the heap and starve the
+    // TLS handshake (~28 KB contiguous needed). Resumed in all exit paths.
+    bool bridgePaused = bridge::isConnected();
+    if (bridgePaused) {
+        bridge::pause();
+        // LWIP frees the TCP socket's kernel buffers asynchronously — give
+        // the stack a beat to actually return that memory before we ask
+        // mbedTLS for a 32 KB contiguous block.
+        delay(250);
+    }
+
+    // TLS handshake needs ~32 KB of *contiguous* heap. Releasing the canvas
     // returns its 32 KB sprite as one block — exactly what mbedTLS wants.
     // Skip the release entirely when the heap already has enough headroom
     // (typical when no canvas-heavy app is running) — avoids a needless
@@ -293,16 +312,23 @@ void runCheck(bool installIfNewer) {
     // to direct-draw and causes a visible flicker.
     bool hadCanvas = ui::canvasActive();
     bool released  = false;
-    if (hadCanvas && ESP.getMaxAllocHeap() < 32 * 1024) {
+    if (hadCanvas && ESP.getMaxAllocHeap() < 36 * 1024) {
         ui::releaseCanvas();
         released = true;
     }
 
+    auto restore = [&]() {
+        if (released) ui::tryAcquireCanvas();
+        if (bridgePaused) bridge::resume();
+    };
+
     size_t maxBlock = ESP.getMaxAllocHeap();
+    Serial.printf("[updater] pre-TLS heap: free=%u largest=%u\n",
+                  (unsigned)ESP.getFreeHeap(), (unsigned)maxBlock);
     if (maxBlock < 28 * 1024) {
         Serial.printf("[updater] skip: max heap block %u (need ~28 KB)\n",
                       (unsigned)maxBlock);
-        if (released) ui::tryAcquireCanvas();
+        restore();
         g_lastCheckMs = millis();
         // Don't persist — this isn't a real result, just a deferred attempt.
         g_status = updater::Status::Idle;
@@ -324,9 +350,11 @@ void runCheck(bool installIfNewer) {
         g_status = updater::Status::Failed;
         Serial.printf("[updater] check failed: %s\n", g_lastError.c_str());
         persistResult();
-        // Report while the canvas is still released — TLS has the heap.
+        // Report while the canvas is still released and BLE is down — TLS
+        // has the heap. Bridge is still paused too, which is exactly what
+        // github::submitIssue needs for its own TLS handshake.
         reportOtaFailure("check-failed", g_lastError);
-        if (released) ui::tryAcquireCanvas();
+        restore();
         return;
     }
 
@@ -334,7 +362,7 @@ void runCheck(bool installIfNewer) {
     g_latestBuiltAt = builtAt;
 
     if (latest == CLAWD_BUILD_SHA) {
-        if (released) ui::tryAcquireCanvas();
+        restore();
         g_status = updater::Status::UpToDate;
         Serial.printf("[updater] up to date (%s)\n", latest.c_str());
         persistResult();
@@ -342,7 +370,7 @@ void runCheck(bool installIfNewer) {
     }
 
     if (!installIfNewer) {
-        if (released) ui::tryAcquireCanvas();
+        restore();
         g_status = updater::Status::UpdateAvailable;
         Serial.printf("[updater] update available: %s (have %s) — waiting for user\n",
                       latest.c_str(), CLAWD_BUILD_SHA);
@@ -350,9 +378,11 @@ void runCheck(bool installIfNewer) {
         return;
     }
 
-    // Auto-flash path: canvas stays released through the flash since we either
-    // reboot on success or fall back to Failed (and ui repaints on next tick).
+    // Auto-flash path: canvas/BLE stay torn down through the flash since we
+    // either reboot on success or fall back to Failed (and the next tick
+    // restores them along with the bridge).
     runFlash(client, latest);
+    restore();
 }
 
 }  // namespace
