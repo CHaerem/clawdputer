@@ -206,6 +206,33 @@ from NVS. First-boot migration copies compile-time secrets (from
 `wifi_secrets.h`) into NVS so CI-built firmware (which has no secrets
 file) keeps the same network on subsequent updates.
 
+**Sealed PAT is per-device.** `firmware/secrets/github_pat.sealed` is
+AES-256-GCM encrypted against `identity::sealKey()` — 32 random bytes
+generated once per device in NVS namespace `identity`. The committed
+sealed file only decrypts on the device whose key it was sealed
+against. An NVS wipe (correctly) destroys the device identity, so the
+sealed PAT will fail to decrypt afterwards (`[sealed]
+gcm_auth_decrypt failed -18`) and both `health.cpp` auto-issue
+submission and the report app's recovery-drain stop posting to
+GitHub. To re-seal:
+
+1. Temporarily add `Serial.printf("[identity] SEAL_KEY=%s\n",
+   g_sealKeyB64.c_str());` after `g_sealKeyB64.assign(...)` in
+   `identity.cpp::loadOrGenerateSealKey()`, flash, capture the base64
+   key over serial, revert the print.
+2. `export CLAWD_SEAL_KEY="<captured>"; python3 tools/seal-pat.py`
+   (reads `tools/github_pat.txt`, writes
+   `firmware/secrets/github_pat.sealed`).
+3. Rebuild and flash. `scripts/embed_secrets.py` regenerates
+   `src/secrets/sealed_blobs.h` from the sealed file on every
+   `pio run`, then commit the updated `.sealed` file so CI builds
+   carry it too.
+
+Multi-device support would require deriving the seal key from eFuse
+MAC (weaker — anyone with the MAC can decrypt) or surrendering the
+per-device guarantee. Single-developer setup, so the manual re-seal
+on NVS wipe is acceptable.
+
 ## Notes on the chat path
 
 The bridge spawns `claude` per turn with:
