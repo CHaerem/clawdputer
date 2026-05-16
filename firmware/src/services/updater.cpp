@@ -16,12 +16,10 @@
 #include "updater.h"
 
 #include <Arduino.h>
-#include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <M5Cardputer.h>
 #include <Preferences.h>
-#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <esp_ota_ops.h>
 #include <time.h>
@@ -29,7 +27,6 @@
 #include "settings.h"
 #include "wifi.h"
 #include "github.h"
-#include "bridge.h"
 #include "ui/canvas.h"
 
 #ifndef CLAWD_BUILD_SHA
@@ -48,19 +45,6 @@ constexpr const char* FIRMWARE_URL =
 constexpr uint32_t CHECK_INTERVAL_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t HEALTH_CONFIRM_MS = 30UL * 1000UL;
 constexpr int      MAX_BOOT_ATTEMPTS = 3;
-
-// Bridge-side OTA proxy. The Mac fronts the GitHub release artifacts over
-// plain HTTP on the LAN so we don't have to fit a ~36 KB mbedtls handshake
-// into a heap whose largest contiguous block is ~31 KB once WiFi is up.
-// Discovered the same way bridge.cpp finds the chat service.
-struct ProxyEndpoint {
-    bool      valid = false;
-    String    host;
-    uint16_t  port = 0;
-    uint32_t  lastTry = 0;
-};
-ProxyEndpoint g_proxy;
-constexpr uint32_t PROXY_RETRY_MS = 60UL * 1000UL;
 
 updater::Status g_status      = updater::Status::Idle;
 uint32_t        g_lastCheckMs = 0;
@@ -223,30 +207,11 @@ void rollbackNow() {
     }
 }
 
-bool discoverProxy() {
-    if (g_proxy.valid) return true;
-    uint32_t now = millis();
-    if (g_proxy.lastTry && now - g_proxy.lastTry < PROXY_RETRY_MS) return false;
-    g_proxy.lastTry = now;
-    if (!MDNS.begin("clawdputer-client")) return false;
-    int n = MDNS.queryService("clawd-ota", "tcp");
-    if (n <= 0) {
-        Serial.println("[updater] no OTA proxy advertised");
-        return false;
-    }
-    g_proxy.host  = MDNS.IP(0).toString();
-    g_proxy.port  = MDNS.port(0);
-    g_proxy.valid = true;
-    Serial.printf("[updater] OTA proxy: %s:%u\n",
-                  g_proxy.host.c_str(), g_proxy.port);
-    return true;
-}
-
-bool fetchManifest(WiFiClient& client, const char* url,
+bool fetchManifest(WiFiClientSecure& client,
                    std::string& shaOut, std::string& builtAtOut) {
     HTTPClient http;
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    if (!http.begin(client, url)) {
+    if (!http.begin(client, MANIFEST_URL)) {
         g_lastError = "manifest http begin failed";
         return false;
     }
@@ -279,9 +244,9 @@ bool fetchManifest(WiFiClient& client, const char* url,
     return true;
 }
 
-void runFlash(WiFiClient& client, const char* url, const std::string& target) {
-    Serial.printf("[updater] flashing %s (have %s) from %s\n",
-                  target.c_str(), CLAWD_BUILD_SHA, url);
+void runFlash(WiFiClientSecure& client, const std::string& target) {
+    Serial.printf("[updater] flashing %s (have %s)\n",
+                  target.c_str(), CLAWD_BUILD_SHA);
     g_status = updater::Status::Downloading;
     drawUpdating(0);
 
@@ -299,11 +264,8 @@ void runFlash(WiFiClient& client, const char* url, const std::string& target) {
     httpUpdate.rebootOnUpdate(true);
     httpUpdate.onProgress(onUpdateProgress);
     // GitHub serves the release artifact via a 302 to objects.githubusercontent.com.
-    // HTTPUpdate refuses to follow redirects by default ("Wrong HTTP Code")
-    // — opt in explicitly. (The bridge proxy returns a direct 200 with the
-    // bytes, so the redirect handler is a no-op on that path.)
     httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    auto ret = httpUpdate.update(client, url);
+    auto ret = httpUpdate.update(client, FIRMWARE_URL);
     if (ret == HTTP_UPDATE_FAILED) {
         g_status    = updater::Status::Failed;
         g_lastError = httpUpdate.getLastErrorString().c_str();
@@ -326,106 +288,14 @@ void runCheck(bool installIfNewer) {
     g_status    = updater::Status::Checking;
     g_lastError = "";
 
-    // Preferred path: ask the Mac bridge to proxy us the GitHub release.
-    // The device can't reliably do its own TLS handshake to github.com
-    // (Arduino-ESP32 mbedtls needs ~36 KB contiguous; the WiFi driver
-    // permanently caps our largest free block around 31 KB). The bridge
-    // does HTTPS for us and re-serves the bytes on the LAN over plain HTTP,
-    // so we skip the entire canvas-release / bridge-pause dance.
-    bool haveProxy = discoverProxy();
-
-    if (haveProxy) {
-        WiFiClient client;
-        char versionUrl[160];
-        snprintf(versionUrl, sizeof(versionUrl),
-                 "http://%s:%u/firmware/version",
-                 g_proxy.host.c_str(), g_proxy.port);
-
-        std::string latest, builtAt;
-        bool ok = fetchManifest(client, versionUrl, latest, builtAt);
-
-        g_lastCheckMs = millis();
-        if (wifi::timeSynced()) g_lastCheckEpoch = (uint32_t)time(nullptr);
-
-        if (!ok) {
-            // Proxy is unhealthy — invalidate so we re-query mDNS next time,
-            // and fall through to the direct-HTTPS path below as a backup.
-            Serial.printf("[updater] proxy failed: %s; trying direct HTTPS\n",
-                          g_lastError.c_str());
-            g_proxy.valid = false;
-        } else {
-            g_latest        = latest;
-            g_latestBuiltAt = builtAt;
-            if (latest == CLAWD_BUILD_SHA) {
-                g_status = updater::Status::UpToDate;
-                Serial.printf("[updater] up to date (%s)\n", latest.c_str());
-                persistResult();
-                return;
-            }
-            if (!installIfNewer) {
-                g_status = updater::Status::UpdateAvailable;
-                Serial.printf("[updater] update available: %s (have %s) — waiting for user\n",
-                              latest.c_str(), CLAWD_BUILD_SHA);
-                persistResult();
-                return;
-            }
-            // Auto-flash through the proxy. Release canvas just so the
-            // "UPDATING" splash has the framebuffer.
-            if (ui::canvasActive()) ui::releaseCanvas();
-            WiFiClient flashClient;
-            char binUrl[160];
-            snprintf(binUrl, sizeof(binUrl),
-                     "http://%s:%u/firmware/bin",
-                     g_proxy.host.c_str(), g_proxy.port);
-            runFlash(flashClient, binUrl, latest);
-            return;
-        }
-    }
-
-    // ── Direct-HTTPS fallback (rarely succeeds on this device) ──────────────
-    // Pause the bridge link for the duration of the check — its TCP socket
-    // and mDNS poller hold buffers that fragment the heap and starve the
-    // TLS handshake (~28 KB contiguous needed). Resumed in all exit paths.
-    bool bridgePaused = bridge::isConnected();
-    if (bridgePaused) {
-        bridge::pause();
-        // LWIP frees the TCP socket's kernel buffers asynchronously — give
-        // the stack a beat to actually return that memory before we ask
-        // mbedTLS for a 32 KB contiguous block.
-        delay(250);
-    }
-
-    // TLS handshake needs ~32 KB of *contiguous* heap. Releasing the canvas
-    // returns its 32 KB sprite as one block — exactly what mbedTLS wants.
-    bool hadCanvas = ui::canvasActive();
-    bool released  = false;
-    if (hadCanvas && ESP.getMaxAllocHeap() < 36 * 1024) {
-        ui::releaseCanvas();
-        released = true;
-    }
-
-    auto restore = [&]() {
-        if (released) ui::tryAcquireCanvas();
-        if (bridgePaused) bridge::resume();
-    };
-
-    size_t maxBlock = ESP.getMaxAllocHeap();
-    Serial.printf("[updater] pre-TLS heap: free=%u largest=%u\n",
-                  (unsigned)ESP.getFreeHeap(), (unsigned)maxBlock);
-    if (maxBlock < 28 * 1024) {
-        Serial.printf("[updater] skip: max heap block %u (need ~28 KB)\n",
-                      (unsigned)maxBlock);
-        restore();
-        g_lastCheckMs = millis();
-        g_status = updater::Status::Idle;
-        return;
-    }
-
+    // mbedTLS allocates from PSRAM (see main.cpp), so the handshake no
+    // longer competes for the ~31 KB largest free internal block. No
+    // canvas-release or bridge-pause dance needed.
     WiFiClientSecure client;
     client.setInsecure();
 
     std::string latest, builtAt;
-    bool ok = fetchManifest(client, MANIFEST_URL, latest, builtAt);
+    bool ok = fetchManifest(client, latest, builtAt);
 
     g_lastCheckMs = millis();
     if (wifi::timeSynced()) g_lastCheckEpoch = (uint32_t)time(nullptr);
@@ -435,7 +305,6 @@ void runCheck(bool installIfNewer) {
         Serial.printf("[updater] check failed: %s\n", g_lastError.c_str());
         persistResult();
         reportOtaFailure("check-failed", g_lastError);
-        restore();
         return;
     }
 
@@ -443,7 +312,6 @@ void runCheck(bool installIfNewer) {
     g_latestBuiltAt = builtAt;
 
     if (latest == CLAWD_BUILD_SHA) {
-        restore();
         g_status = updater::Status::UpToDate;
         Serial.printf("[updater] up to date (%s)\n", latest.c_str());
         persistResult();
@@ -451,7 +319,6 @@ void runCheck(bool installIfNewer) {
     }
 
     if (!installIfNewer) {
-        restore();
         g_status = updater::Status::UpdateAvailable;
         Serial.printf("[updater] update available: %s (have %s) — waiting for user\n",
                       latest.c_str(), CLAWD_BUILD_SHA);
@@ -459,8 +326,8 @@ void runCheck(bool installIfNewer) {
         return;
     }
 
-    runFlash(client, FIRMWARE_URL, latest);
-    restore();
+    if (ui::canvasActive()) ui::releaseCanvas();
+    runFlash(client, latest);
 }
 
 }  // namespace
@@ -530,18 +397,9 @@ void tick() {
         g_installRequested = false;
         if (g_status == Status::UpdateAvailable && !g_latest.empty()) {
             if (ui::canvasActive()) ui::releaseCanvas();
-            if (discoverProxy()) {
-                WiFiClient client;
-                char binUrl[160];
-                snprintf(binUrl, sizeof(binUrl),
-                         "http://%s:%u/firmware/bin",
-                         g_proxy.host.c_str(), g_proxy.port);
-                runFlash(client, binUrl, g_latest);
-            } else {
-                WiFiClientSecure client;
-                client.setInsecure();
-                runFlash(client, FIRMWARE_URL, g_latest);
-            }
+            WiFiClientSecure client;
+            client.setInsecure();
+            runFlash(client, g_latest);
             return;
         }
     }
