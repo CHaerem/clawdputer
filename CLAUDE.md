@@ -161,6 +161,28 @@ On device, `services/updater.cpp`:
 - streams `firmware.bin` into the inactive OTA partition via HTTPUpdate
   when newer
 
+**Recovery-boot OTA.** The StampS3 has no PSRAM and the prebuilt
+mbedTLS in Arduino-ESP32 2.x wants ~36 KB contiguous heap for the
+github.com handshake. After a full boot, fragmentation caps the
+largest free block at ~31 KB and the handshake fails. So the actual
+flash path is a **two-reboot dance**:
+1. Settings → "check & install →" calls `updater::installNow()` which
+   writes `recovery=true` to NVS and reboots.
+2. `main.cpp::setup()` checks `updater::isRecoveryBoot()` *before*
+   the canvas sprite, BLE, or apps are initialised. If set, it calls
+   `updater::runRecovery()` — a minimal flow that connects WiFi,
+   fetches the manifest, and flashes via stock `WiFiClientSecure`.
+   With a pristine heap, the largest free block is ~65 KB and the
+   TLS handshake succeeds.
+3. On flash success, HTTPUpdate reboots into the new image. On no-op
+   ("already up to date") or failure, the device reboots back into
+   normal mode. Failure reasons are persisted in `rec_fail` and
+   surfaced as `Status::Failed` / `lastError()` on the next normal
+   boot.
+
+The periodic background `runCheck()` still tries direct HTTPS and
+fails — it's tolerated noise until we have a non-TLS check channel.
+
 **Rollback** is app-level (ESP-IDF's built-in rollback is not enabled
 because it requires a framework rebuild):
 1. Before flashing, `pending=true` and `boots=0` written to NVS.

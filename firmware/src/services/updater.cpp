@@ -51,7 +51,6 @@ uint32_t        g_lastCheckMs = 0;
 uint32_t        g_lastCheckEpoch = 0;
 bool            g_forceCheck  = true;
 bool            g_confirmed   = false;
-bool            g_installRequested = false;
 std::string     g_latest;
 std::string     g_latestBuiltAt;
 std::string     g_lastError;
@@ -176,6 +175,31 @@ void drawUpdating(int pct) {
     d.drawRect(barX, barY, barW, barH, WHITE);
     int fill = (int)((barW - 2) * pct / 100);
     d.fillRect(barX + 1, barY + 1, fill, barH - 2, 0x07E0);
+    d.setCursor(8, 88);
+    d.setTextColor(0x7BEF);
+    d.print("do not unplug");
+}
+
+// Recovery-mode painter — header is "OTA RECOVERY" and the body shows
+// the current phase plus a progress bar. Draws directly to the LCD; never
+// touches the canvas sprite (which is what we skipped allocating to keep
+// the heap unfragmented for the TLS handshake).
+void drawRecovery(const char* phase, int pct) {
+    auto& d = M5Cardputer.Display;
+    d.fillScreen(BLACK);
+    d.setTextSize(2);
+    d.setTextColor(WHITE);
+    d.setCursor(8, 8);
+    d.print("OTA RECOVERY");
+    d.setTextSize(1);
+    d.setCursor(8, 36);
+    d.print(phase);
+    int barX = 8, barY = 56, barW = 224, barH = 10;
+    d.drawRect(barX, barY, barW, barH, WHITE);
+    if (pct >= 0) {
+        int fill = (int)((barW - 2) * pct / 100);
+        d.fillRect(barX + 1, barY + 1, fill, barH - 2, 0x07E0);
+    }
     d.setCursor(8, 88);
     d.setTextColor(0x7BEF);
     d.print("do not unplug");
@@ -330,6 +354,115 @@ void runCheck(bool installIfNewer) {
     runFlash(client, latest);
 }
 
+// Recovery-mode globals — used by onRecoveryProgress so the painter knows
+// which phase string to keep above the bar during the flash.
+const char* g_recoveryPhase = "downloading…";
+
+void onRecoveryProgress(int cur, int total) {
+    if (total <= 0) return;
+    static int lastPct = -1;
+    int pct = (int)((int64_t)cur * 100 / total);
+    if (pct == lastPct) return;
+    lastPct = pct;
+    drawRecovery(g_recoveryPhase, pct);
+}
+
+void persistRecoveryFailure(const char* reason) {
+    Preferences prefs;
+    prefs.begin("updater", false);
+    prefs.putString("rec_fail", reason);
+    // Clear any flash-pending bookkeeping — recovery failed before flashing.
+    prefs.putBool("pending", false);
+    prefs.putInt("boots", 0);
+    prefs.end();
+    Serial.printf("[updater] recovery failed: %s\n", reason);
+}
+
+[[noreturn]] void runRecoveryImpl() {
+    // Consume the recovery flag immediately so a crash from here on falls
+    // through to a normal boot rather than looping back into recovery.
+    {
+        Preferences prefs;
+        prefs.begin("updater", false);
+        prefs.putBool("recovery", false);
+        prefs.putString("rec_fail", "");
+        prefs.end();
+    }
+
+    drawRecovery("connecting to wifi…", -1);
+    wifi::begin();
+
+    uint32_t deadline = millis() + 20000;
+    while (!wifi::isConnected() && millis() < deadline) {
+        delay(100);
+    }
+    if (!wifi::isConnected()) {
+        persistRecoveryFailure("wifi timeout");
+        drawRecovery("wifi timeout — rebooting", -1);
+        delay(2000);
+        ESP.restart();
+    }
+
+    Serial.printf("[updater] recovery pre-TLS: free=%u largest=%u\n",
+                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+
+    drawRecovery("checking manifest…", -1);
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    std::string latest, builtAt;
+    if (!fetchManifest(client, latest, builtAt)) {
+        persistRecoveryFailure(g_lastError.empty() ? "manifest fetch failed"
+                                                   : g_lastError.c_str());
+        drawRecovery("manifest failed — rebooting", -1);
+        delay(2000);
+        ESP.restart();
+    }
+
+    if (latest == CLAWD_BUILD_SHA) {
+        Serial.println("[updater] recovery: already up to date");
+        // Not a failure — just nothing to do. Persist the result so the UI
+        // reflects the successful check.
+        g_latest         = latest;
+        g_latestBuiltAt  = builtAt;
+        g_status         = updater::Status::UpToDate;
+        g_lastError      = "";
+        persistResult();
+        drawRecovery("already up to date", 100);
+        delay(1500);
+        ESP.restart();
+    }
+
+    Serial.printf("[updater] recovery: flashing %s (have %s)\n",
+                  latest.c_str(), CLAWD_BUILD_SHA);
+    g_recoveryPhase = "downloading…";
+    drawRecovery(g_recoveryPhase, 0);
+
+    // Same NVS bookkeeping as the normal-mode flash path so rollback works.
+    {
+        Preferences prefs;
+        prefs.begin("updater", false);
+        prefs.putBool("pending", true);
+        prefs.putInt("boots", 0);
+        prefs.putString("target", latest.c_str());
+        prefs.end();
+    }
+
+    httpUpdate.rebootOnUpdate(true);
+    httpUpdate.onProgress(onRecoveryProgress);
+    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    auto ret = httpUpdate.update(client, FIRMWARE_URL);
+    // Success reboots inside httpUpdate.update(). Anything below is failure.
+    (void)ret;
+
+    std::string err = httpUpdate.getLastErrorString().c_str();
+    if (err.empty()) err = "flash failed";
+    persistRecoveryFailure(err.c_str());
+    drawRecovery("flash failed — rebooting", -1);
+    delay(2000);
+    ESP.restart();
+}
+
 }  // namespace
 
 namespace updater {
@@ -351,6 +484,17 @@ void begin() {
     if (rolledBack) {
         Serial.println("[updater] booted after a rollback — previous flash was unhealthy");
         prefs.putBool("rolled_back", false);
+    }
+
+    // If the previous boot was a failed recovery attempt, surface the reason
+    // through the normal Status::Failed / lastError() channel so the Settings
+    // UI shows it. Also file an issue once WiFi is up (handled in tick()).
+    std::string recFail = prefs.getString("rec_fail", "").c_str();
+    if (!recFail.empty()) {
+        g_status    = Status::Failed;
+        g_lastError = std::string("recovery: ") + recFail;
+        prefs.putString("rec_fail", "");
+        Serial.printf("[updater] previous recovery failed: %s\n", recFail.c_str());
     }
 
     if (pending) {
@@ -393,17 +537,6 @@ void tick() {
     if (!wifi::isConnected()) return;
     uint32_t now = millis();
 
-    if (g_installRequested) {
-        g_installRequested = false;
-        if (g_status == Status::UpdateAvailable && !g_latest.empty()) {
-            if (ui::canvasActive()) ui::releaseCanvas();
-            WiFiClientSecure client;
-            client.setInsecure();
-            runFlash(client, g_latest);
-            return;
-        }
-    }
-
     // Small defer after boot — gives WiFi connect scratch buffers time to
     // free before we open a TLS socket.
     if (now < 5000) return;
@@ -426,7 +559,7 @@ void tick() {
 }
 
 void checkNow()   { g_forceCheck = true; }
-void installNow() { g_installRequested = true; }
+void installNow() { scheduleRecoveryUpdate(); }   // never returns
 
 Status      status()           { return g_status; }
 const char* statusText()       { return statusTextFor(g_status); }
@@ -437,5 +570,26 @@ std::string latestBuiltAt()    { return g_latestBuiltAt; }
 uint32_t    lastCheckMs()      { return g_lastCheckMs; }
 uint32_t    lastCheckEpoch()   { return g_lastCheckEpoch; }
 std::string lastError()        { return g_lastError; }
+
+void scheduleRecoveryUpdate() {
+    Preferences prefs;
+    prefs.begin("updater", false);
+    prefs.putBool("recovery", true);
+    prefs.putString("rec_fail", "");
+    prefs.end();
+    Serial.println("[updater] scheduled recovery-boot update");
+    delay(100);
+    ESP.restart();
+}
+
+bool isRecoveryBoot() {
+    Preferences prefs;
+    prefs.begin("updater", true);   // read-only
+    bool v = prefs.getBool("recovery", false);
+    prefs.end();
+    return v;
+}
+
+[[noreturn]] void runRecovery() { runRecoveryImpl(); }
 
 }  // namespace updater

@@ -6,8 +6,6 @@
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
-#include <esp_heap_caps.h>
-#include <mbedtls/platform.h>
 
 #include <string>
 
@@ -170,24 +168,22 @@ void setup() {
     M5Cardputer.begin(cfg, true);
     M5Cardputer.Display.setRotation(1);
 
-    // Route mbedTLS allocations to PSRAM so the TLS handshake (~36 KB
-    // contiguous) doesn't have to fit alongside WiFi in internal SRAM.
-    // Must run before WiFi or any TLS code touches mbedtls. PSRAM is
-    // 8 MB on this board, so fragmentation is a non-issue there.
-    static auto psram_calloc = +[](size_t n, size_t sz) -> void* {
-        void* p = heap_caps_calloc(n, sz, MALLOC_CAP_SPIRAM);
-        if (!p) p = calloc(n, sz);   // fall back if PSRAM is exhausted
-        return p;
-    };
-    mbedtls_platform_set_calloc_free(psram_calloc, free);
-
     Serial.begin(115200);
     delay(200);
     Serial.println();
     Serial.println("[clawdputer] boot");
-    Serial.printf("[clawdputer] PSRAM size=%u free=%u\n",
-                  (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreePsram());
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
+
+    // Recovery-boot OTA: if scheduleRecoveryUpdate() was called before the
+    // last reboot, run the flash now while the heap is still pristine —
+    // before the canvas sprite, BLE, or apps have a chance to fragment it.
+    // mbedTLS needs ~36 KB contiguous for the github.com handshake; once
+    // the rest of setup() has run, the largest free block drops to ~31 KB.
+    // runRecovery() never returns — it reboots either way.
+    if (updater::isRecoveryBoot()) {
+        Serial.println("[clawdputer] entering OTA recovery mode");
+        updater::runRecovery();
+    }
 
     // Touching ui::display() triggers the canvas allocation so we know up
     // front whether the backbuffer is available. Allocated first because

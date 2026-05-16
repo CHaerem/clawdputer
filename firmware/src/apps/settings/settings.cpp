@@ -79,18 +79,14 @@ void actSleepNow() {
     power::deepSleep();
 }
 
-void actCheckUpdate() {
-    updater::checkNow();
-    toast("checking for updates…");
-}
-
 void actInstallUpdate() {
-    if (updater::status() != updater::Status::UpdateAvailable) {
-        toast("no update available");
-        return;
-    }
-    updater::installNow();
-    toast("installing update…");
+    // Triggers a recovery-boot OTA: device reboots, fetches the manifest in
+    // a minimal env (where the heap isn't fragmented enough to block the
+    // mbedTLS handshake), and flashes if a newer SHA is published. If
+    // there's nothing newer, recovery just reboots back to normal mode.
+    toast("rebooting to install…");
+    delay(600);
+    updater::installNow();   // never returns
 }
 
 void actClearWifi() {
@@ -283,10 +279,7 @@ void rebuild() {
             g_items.push_back(cinfo("error", err, 0xF800));
         }
 
-        g_items.push_back(act("check now", actCheckUpdate));
-        if (s == updater::Status::UpdateAvailable) {
-            g_items.push_back(act("install update →", actInstallUpdate));
-        }
+        g_items.push_back(act("check & install →", actInstallUpdate));
     }
 
     // ── IDENTITY ──

@@ -28,11 +28,13 @@ void begin();
 // while.
 void tick();
 
-// Force a check on the next tick (used by Settings → Check for updates).
+// Force a check on the next tick. (Currently unused by the UI — the
+// periodic background check is the only caller path that still uses it.
+// Manual user updates go through installNow() → recovery boot instead.)
 void checkNow();
 
-// Apply the pending update right away. No-op unless status() is
-// UpdateAvailable. Used by Settings → Install update when auto-update is off.
+// Reboot into recovery mode and run an atomic check-and-flash there.
+// Calls scheduleRecoveryUpdate() — never returns to the caller.
 void installNow();
 
 Status      status();
@@ -52,5 +54,21 @@ uint32_t    lastCheckEpoch();
 uint32_t    lastCheckMs();
 
 std::string lastError();        // "" if last check succeeded
+
+// Request an OTA on the next boot. Writes a flag to NVS and reboots.
+// The next boot detects the flag very early in setup() and branches into
+// runRecovery() — a minimal env (no canvas sprite, no BLE, no apps) where
+// the heap is unfragmented enough for the mbedTLS handshake to github.com.
+void scheduleRecoveryUpdate();
+
+// Called from main.cpp setup() before any heap-fragmenting init. Returns
+// true if scheduleRecoveryUpdate() was called on the previous boot.
+bool isRecoveryBoot();
+
+// Runs the recovery flow: WiFi connect → fetch manifest → flash if newer.
+// Never returns — always reboots (into the new image on success, into
+// normal mode on failure). Caller must have already done M5Cardputer.begin()
+// so the status screen can be drawn.
+[[noreturn]] void runRecovery();
 
 }  // namespace updater
