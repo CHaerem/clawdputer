@@ -7,16 +7,19 @@
 namespace updater {
 
 enum class Status {
-    Idle,
-    Checking,
-    UpToDate,
-    Downloading,
-    Failed,
+    Idle,             // no check has run this boot
+    Checking,         // manifest fetch in progress
+    UpToDate,         // running SHA matches the published latest
+    UpdateAvailable,  // a newer SHA exists; awaiting installNow() (manual mode)
+    Downloading,      // streaming firmware.bin into the OTA partition
+    Failed,           // last check or flash failed; see lastError()
 };
 
 // Should be called from setup() once, before the main loop. Reads the
 // pending-flash flag from NVS and either increments the boot-attempt
 // counter (rolling back if we exceed the threshold) or does nothing.
+// Also loads persisted status from previous boot so the Settings UI has
+// something to show before the first network check completes.
 void begin();
 
 // Should be called from the main loop. Throttles network checks internally —
@@ -28,11 +31,26 @@ void tick();
 // Force a check on the next tick (used by Settings → Check for updates).
 void checkNow();
 
+// Apply the pending update right away. No-op unless status() is
+// UpdateAvailable. Used by Settings → Install update when auto-update is off.
+void installNow();
+
 Status      status();
 const char* statusText();
+
 const char* currentVersion();   // CLAWD_BUILD_SHA at compile time
-std::string latestVersion();    // last seen from manifest, "" if unchecked
-uint32_t    lastCheckMs();      // millis() when last check completed; 0 if none
-std::string lastError();
+const char* currentBuiltAt();   // CLAWD_BUILD_DATE (ISO 8601) at compile time
+
+std::string latestVersion();    // last seen sha from manifest, "" if unchecked
+std::string latestBuiltAt();    // last seen build date (ISO 8601), "" if absent
+
+// Wall-clock epoch (seconds) of the last completed check. 0 if never checked
+// or NTP wasn't synced when the check ran.
+uint32_t    lastCheckEpoch();
+// Monotonic millis() of the last completed check this boot. 0 if no check has
+// finished since boot — useful when wall-clock is unknown.
+uint32_t    lastCheckMs();
+
+std::string lastError();        // "" if last check succeeded
 
 }  // namespace updater

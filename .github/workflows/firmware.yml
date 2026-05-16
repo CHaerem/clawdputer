@@ -64,9 +64,10 @@ jobs:
         id: stage
         run: |
           SHA=$(git rev-parse --short=7 HEAD)
+          DATE=$(git show -s --format=%cI HEAD | cut -c1-10)
           mkdir -p out
           cp firmware/.pio/build/cardputer/firmware.bin out/firmware.bin
-          printf '%s\n' "$SHA" > out/version.txt
+          printf '%s\n%s\n' "$SHA" "$DATE" > out/version.txt
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           ls -lh out
 

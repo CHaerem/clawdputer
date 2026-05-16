@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <M5Cardputer.h>
+#include <time.h>
 
 #include <string>
 #include <vector>
@@ -31,6 +32,7 @@ struct Item {
     std::string value;
     void (*action)() = nullptr;
     bool isHeader    = false;
+    uint16_t valueColor = 0;   // 0 = default; otherwise overrides info-row colour
 };
 
 std::vector<Item> g_items;
@@ -79,6 +81,15 @@ void actSleepNow() {
 void actCheckUpdate() {
     updater::checkNow();
     toast("checking for updates…");
+}
+
+void actInstallUpdate() {
+    if (updater::status() != updater::Status::UpdateAvailable) {
+        toast("no update available");
+        return;
+    }
+    updater::installNow();
+    toast("installing update…");
 }
 
 void actClearWifi() {
@@ -168,6 +179,31 @@ void actShowInstall() {
 
 // ── item list ────────────────────────────────────────────────────────────────
 
+std::string relativeTime(uint32_t epoch) {
+    if (epoch == 0) return "never";
+    time_t now = time(nullptr);
+    if (now < 1704067200 || now < (time_t)epoch) return "just now";
+    uint32_t diff = (uint32_t)(now - epoch);
+    char buf[24];
+    if (diff < 45)             snprintf(buf, sizeof(buf), "just now");
+    else if (diff < 3600)      snprintf(buf, sizeof(buf), "%um ago", diff / 60);
+    else if (diff < 86400)     snprintf(buf, sizeof(buf), "%uh ago", diff / 3600);
+    else if (diff < 86400 * 7) snprintf(buf, sizeof(buf), "%ud ago", diff / 86400);
+    else                       snprintf(buf, sizeof(buf), "%uw ago", diff / (86400 * 7));
+    return buf;
+}
+
+uint16_t statusColor(updater::Status s) {
+    switch (s) {
+        case updater::Status::UpToDate:        return 0x07E0;  // green
+        case updater::Status::UpdateAvailable: return 0xFFE0;  // yellow
+        case updater::Status::Checking:
+        case updater::Status::Downloading:     return 0x07FF;  // cyan
+        case updater::Status::Failed:          return 0xF800;  // red
+        default:                               return 0x8C71;  // gray
+    }
+}
+
 void rebuild() {
     g_items.clear();
 
@@ -181,6 +217,13 @@ void rebuild() {
         Item it;
         it.label  = label;
         it.value  = value;
+        return it;
+    };
+    auto cinfo = [](const char* label, const std::string& value, uint16_t color) {
+        Item it;
+        it.label      = label;
+        it.value      = value;
+        it.valueColor = color;
         return it;
     };
     auto act = [](const char* label, void (*fn)()) {
@@ -201,6 +244,49 @@ void rebuild() {
     g_items.push_back(hdr("DEVICE"));
     g_items.push_back(act("Device info →", actGoSysinfo));
     g_items.push_back(act("Battery →",     actGoBattery));
+
+    // ── UPDATES (promoted: this is what users come to Settings for) ──
+    g_items.push_back(hdr("UPDATES"));
+    {
+        auto s = updater::status();
+        g_items.push_back(cinfo("status", updater::statusText(), statusColor(s)));
+
+        std::string installed = updater::currentVersion();
+        const char* curDate   = updater::currentBuiltAt();
+        if (curDate && curDate[0]) {
+            installed += "  ";
+            installed += curDate;
+        }
+        g_items.push_back(info("installed", installed));
+
+        std::string latest = updater::latestVersion();
+        if (latest.empty()) {
+            g_items.push_back(cinfo("latest", "unknown", 0x8C71));
+        } else {
+            std::string row = latest;
+            std::string lbd = updater::latestBuiltAt();
+            if (!lbd.empty()) {
+                row += "  ";
+                row += lbd;
+            }
+            // Highlight the latest row if it differs from installed.
+            bool newer = (s == updater::Status::UpdateAvailable);
+            g_items.push_back(cinfo("latest", row, newer ? 0xFFE0 : 0x07E0));
+        }
+
+        g_items.push_back(info("last check", relativeTime(updater::lastCheckEpoch())));
+
+        if (s == updater::Status::Failed && !updater::lastError().empty()) {
+            std::string err = updater::lastError();
+            if (err.size() > 28) err = err.substr(0, 27) + "…";
+            g_items.push_back(cinfo("error", err, 0xF800));
+        }
+
+        g_items.push_back(act("check now", actCheckUpdate));
+        if (s == updater::Status::UpdateAvailable) {
+            g_items.push_back(act("install update →", actInstallUpdate));
+        }
+    }
 
     // ── IDENTITY ──
     g_items.push_back(hdr("IDENTITY"));
@@ -237,11 +323,6 @@ void rebuild() {
             settings::reportEnabled() ? std::string("on") : std::string("off"),
             actToggleReport));
     }
-
-    // ── UPDATES ──
-    g_items.push_back(hdr("UPDATES"));
-    g_items.push_back(info("build", updater::currentVersion()));
-    g_items.push_back(act("check for updates", actCheckUpdate));
 
     // ── SYSTEM ──
     g_items.push_back(hdr("SYSTEM"));
@@ -391,11 +472,17 @@ void render() {
             d.setTextColor(selected ? 0xFFE0 : 0x8C71);
             d.print(selected ? "press \xC3\xAB" : "      \xC3\xAB");
         } else {
-            // Read-only info value.
-            d.setCursor(valX, y + 1);
-            d.setTextColor(selected ? 0xFFFF : WHITE);
+            // Read-only info value. Use a wider column than toggles/actions
+            // so timestamps and SHAs fit without ugly truncation.
+            int infoValX = 90;
+            d.setCursor(infoValX, y + 1);
+            uint16_t col = item.valueColor
+                ? item.valueColor
+                : (selected ? 0xFFFF : WHITE);
+            d.setTextColor(col);
             std::string v = item.value;
-            if (v.size() > 14) v = v.substr(0, 13) + "…";
+            int maxChars = (SCREEN_W - infoValX - 6) / 6;
+            if ((int)v.size() > maxChars) v = v.substr(0, maxChars - 1) + "…";
             d.print(v.c_str());
         }
         y += row_h;
@@ -419,7 +506,10 @@ void render() {
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
+updater::Status g_lastSeenStatus = updater::Status::Idle;
+
 void onEnter() {
+    g_lastSeenStatus = updater::status();
     rebuild();
     clampSelection();
     g_dirty = true;
@@ -432,6 +522,27 @@ void onTick() {
     uint32_t now = millis();
     if (now - lastRefresh >= 1000) {
         lastRefresh = now;
+        auto cur = updater::status();
+        if (cur != g_lastSeenStatus) {
+            switch (cur) {
+                case updater::Status::UpToDate:
+                    toast("up to date");
+                    break;
+                case updater::Status::UpdateAvailable:
+                    toast(std::string("update: ") + updater::latestVersion());
+                    break;
+                case updater::Status::Failed: {
+                    std::string err = updater::lastError();
+                    if (err.empty()) err = "unknown";
+                    if (err.size() > 24) err = err.substr(0, 23) + "…";
+                    toast(std::string("check failed: ") + err);
+                    break;
+                }
+                default:
+                    break;
+            }
+            g_lastSeenStatus = cur;
+        }
         rebuild();
         g_dirty = true;
     }

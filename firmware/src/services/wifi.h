@@ -13,6 +13,10 @@ void begin();
 
 bool isConnected();
 
+// True once SNTP has set the system clock (within ~30s of first connect).
+// Updater uses this to decide whether to record wall-clock timestamps.
+bool timeSynced();
+
 // Local IP as a dotted string, or empty when disconnected.
 std::string ip();
 

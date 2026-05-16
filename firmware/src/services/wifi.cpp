@@ -3,7 +3,9 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_sntp.h>
 #include <esp_wifi.h>
+#include <time.h>
 
 #include "core/event_bus.h"
 
@@ -23,7 +25,14 @@ namespace {
 bool g_enabled   = false;
 bool g_connected = false;
 bool g_paused    = false;
+bool g_sntpStarted = false;
 std::string g_ssid;
+
+void ensureSntp() {
+    if (g_sntpStarted) return;
+    configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
+    g_sntpStarted = true;
+}
 
 void onWifiEvent(WiFiEvent_t event) {
     bool nowConnected = (WiFi.status() == WL_CONNECTED);
@@ -31,6 +40,7 @@ void onWifiEvent(WiFiEvent_t event) {
     g_connected = nowConnected;
     if (g_connected) {
         Serial.printf("[wifi] connected, ip=%s\n", WiFi.localIP().toString().c_str());
+        ensureSntp();
         events::publish({EventType::LinkConnected, EventSource::WifiLink, {}});
     } else {
         Serial.println("[wifi] disconnected");
@@ -91,6 +101,12 @@ void begin() {
 }
 
 bool isConnected() { return g_enabled && g_connected; }
+
+bool timeSynced() {
+    // Trust the clock once it's past 2024-01-01. Anything earlier means
+    // SNTP hasn't replied yet (RTC starts at 1970).
+    return time(nullptr) > 1704067200;
+}
 
 std::string ip() {
     if (!g_connected) return "";
