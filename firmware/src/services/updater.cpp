@@ -26,6 +26,7 @@
 
 #include "settings.h"
 #include "wifi.h"
+#include "github.h"
 #include "ui/canvas.h"
 
 #ifndef CLAWD_BUILD_SHA
@@ -97,6 +98,62 @@ void persistResult() {
     prefs.putString("err", g_lastError.c_str());
     prefs.putUInt("epoch", g_lastCheckEpoch);
     prefs.end();
+}
+
+constexpr uint32_t REPORT_DEDUP_SECS = 24 * 3600;
+
+bool reportDedupAllow(const char* kind) {
+    Preferences prefs;
+    prefs.begin("updater", false);
+    String key = String("rep_") + kind;
+    uint32_t last = prefs.getUInt(key.c_str(), 0);
+    uint32_t now  = (uint32_t)(millis() / 1000);
+    bool allow = (last == 0) || (now > last && now - last >= REPORT_DEDUP_SECS);
+    if (allow) prefs.putUInt(key.c_str(), now);
+    prefs.end();
+    return allow;
+}
+
+// File a GitHub issue for an OTA failure. Caller must have already
+// released the canvas (so TLS has the contiguous heap it needs) and is
+// responsible for reacquiring afterward. No-op when reporting is off,
+// no PAT is sealed in, WiFi is down, or this kind fired recently.
+void reportOtaFailure(const char* kind, const std::string& detail) {
+    if (!settings::reportEnabled())  return;
+    if (!github::hasToken())         return;
+    if (!wifi::isConnected())        return;
+    if (!reportDedupAllow(kind))     return;
+
+    std::string title = std::string("[ota] ") + kind + ": " + detail;
+    if (title.size() > 120) title = title.substr(0, 119) + "…";
+
+    char hdr[640];
+    snprintf(hdr, sizeof(hdr),
+             "Automated OTA failure report.\n\n"
+             "- **Kind:** `%s`\n"
+             "- **Detail:** `%s`\n"
+             "- **Installed build:** `%s` (%s)\n"
+             "- **Latest seen:** `%s` (%s)\n"
+             "- **Manifest URL:** %s\n"
+             "- **Firmware URL:** %s\n"
+             "- **Uptime:** %us\n"
+             "- **Free heap:** %u\n"
+             "- **Largest block:** %u\n\n"
+             "_Filed automatically — see `firmware/src/services/updater.cpp`._\n",
+             kind, detail.c_str(),
+             CLAWD_BUILD_SHA, CLAWD_BUILD_DATE,
+             g_latest.empty() ? "—" : g_latest.c_str(),
+             g_latestBuiltAt.empty() ? "—" : g_latestBuiltAt.c_str(),
+             MANIFEST_URL, FIRMWARE_URL,
+             (unsigned)(millis() / 1000),
+             (unsigned)ESP.getFreeHeap(),
+             (unsigned)ESP.getMaxAllocHeap());
+
+    Serial.printf("[updater] filing issue: %s\n", title.c_str());
+    auto r = github::submitIssue(title, hdr, "auto-ota");
+    if (r.ok) Serial.printf("[updater] issue #%d: %s\n",
+                            r.issueNumber, r.issueUrl.c_str());
+    else      Serial.printf("[updater] submit failed: %s\n", r.error.c_str());
 }
 
 void drawUpdating(int pct) {
@@ -217,6 +274,8 @@ void runFlash(WiFiClientSecure& client, const std::string& target) {
         prefs.putInt("boots", 0);
         prefs.end();
         persistResult();
+        // Canvas is already released through the flash path; TLS heap is free.
+        reportOtaFailure("flash-failed", g_lastError);
     }
 }
 
@@ -262,10 +321,12 @@ void runCheck(bool installIfNewer) {
     }
 
     if (!ok) {
-        if (released) ui::tryAcquireCanvas();
         g_status = updater::Status::Failed;
         Serial.printf("[updater] check failed: %s\n", g_lastError.c_str());
         persistResult();
+        // Report while the canvas is still released — TLS has the heap.
+        reportOtaFailure("check-failed", g_lastError);
+        if (released) ui::tryAcquireCanvas();
         return;
     }
 
