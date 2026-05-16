@@ -16,6 +16,7 @@
 #include "services/ble.h"
 #include "services/bridge.h"
 #include "services/crashlog.h"
+#include "services/health.h"
 #include "services/identity.h"
 #include "services/imu.h"
 #include "services/ota.h"
@@ -56,6 +57,7 @@ void enter(const App* app) {
     applyServices(app->services);
     g_active = app;
     crashlog::noteAppEntered(app->id);
+    health::noteAppEntered(app->id);
     if (g_active->onEnter) g_active->onEnter();
     Serial.printf("[clawdputer] entered app: %s\n", g_active->id);
 }
@@ -192,6 +194,7 @@ void setup() {
     sd::begin();
     // crashlog needs sd::isAvailable() so init order is sd → crashlog.
     crashlog::begin();
+    health::begin();
     bridge::begin();
 
     goHome();
@@ -211,6 +214,7 @@ void loop() {
     ota::tick();
     updater::tick();
     crashlog::tick();
+    health::tick();
     clawd_bridge_tick();
     if (ota::isUpdating()) {
         delay(5);

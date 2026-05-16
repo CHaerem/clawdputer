@@ -10,6 +10,12 @@ namespace {
 // underlying buffer is what consumes/releases heap.
 M5Canvas g_canvas(&M5Cardputer.Display);
 bool     g_active = false;
+
+#ifdef CLAWD_PROFILE_CANVAS
+uint32_t g_frames = 0;
+uint32_t g_pushUs = 0;
+uint32_t g_lastLog = 0;
+#endif
 }  // namespace
 
 LovyanGFX& display() {
@@ -22,7 +28,27 @@ void beginFrame() {
 }
 
 void flush() {
-    if (g_active) g_canvas.pushSprite(0, 0);
+    if (!g_active) return;
+#ifdef CLAWD_PROFILE_CANVAS
+    uint32_t t0 = micros();
+#endif
+    auto& dst = M5Cardputer.Display;
+    dst.startWrite();
+    g_canvas.pushSprite(&dst, 0, 0);
+    dst.endWrite();
+#ifdef CLAWD_PROFILE_CANVAS
+    g_pushUs += (micros() - t0);
+    g_frames++;
+    uint32_t now = millis();
+    if (now - g_lastLog >= 2000) {
+        uint32_t avgUs = g_frames ? g_pushUs / g_frames : 0;
+        Serial.printf("[ui] %u frames in %ums, avg push %uus (~%u fps cap)\n",
+                      (unsigned)g_frames, (unsigned)(now - g_lastLog),
+                      (unsigned)avgUs,
+                      (unsigned)(avgUs ? 1000000 / avgUs : 0));
+        g_frames = 0; g_pushUs = 0; g_lastLog = now;
+    }
+#endif
 }
 
 bool tryAcquireCanvas() {
