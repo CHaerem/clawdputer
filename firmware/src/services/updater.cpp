@@ -26,6 +26,7 @@
 
 #include "wifi.h"
 #include "telemetry.h"
+#include "identity.h"
 
 #ifndef CLAWD_BUILD_SHA
 #define CLAWD_BUILD_SHA "unknown"
@@ -210,6 +211,7 @@ void persistRecoveryFailure(const char* reason) {
     }
 
     drawRecovery("connecting to wifi…", -1);
+    identity::loadOrGenerateSealKey();
     wifi::begin();
 
     uint32_t deadline = millis() + 20000;

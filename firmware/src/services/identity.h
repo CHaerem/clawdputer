@@ -13,6 +13,11 @@ namespace identity {
 
 void begin();
 
+// Load (or generate-and-persist) just the AES-256 seal key. Cheap, no libssh.
+// Recovery boot calls this so it can decrypt the GitHub PAT for telemetry
+// drain without paying for the full Ed25519 keypair load.
+void loadOrGenerateSealKey();
+
 // Public key in OpenSSH format: "ssh-ed25519 AAAA... clawdputer@<mac>".
 // Safe to display, log, or commit to a repo as authorized_keys content.
 std::string publicKeyOpenSsh();
