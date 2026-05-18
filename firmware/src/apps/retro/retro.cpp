@@ -54,11 +54,20 @@ extern "C" {
 
 namespace {
 
-constexpr const char* ROMS_DIR     = "/roms";
-constexpr const char* SAVES_DIR    = "/saves";
-constexpr const char* MANIFEST_URL =
+// Arduino-ESP32's SD library mounts at /sd and registers with the ESP-IDF
+// VFS, so POSIX fopen/fread/fseek work on SD files through that prefix.
+// gnuboy_load_rom_file() uses fopen internally and streams 16 KB banks
+// on demand, so we don't slurp the whole ROM into SRAM — Pokemon-class
+// titles (1-2 MB) work without PSRAM.
+constexpr const char* ROMS_DIR        = "/roms";              // Arduino-SD path
+constexpr const char* SAVES_DIR       = "/saves";             // Arduino-SD path
+constexpr const char* VFS_ROMS_DIR    = "/sd/roms";           // POSIX fopen path
+constexpr const char* VFS_SAVES_DIR   = "/sd/saves";          // POSIX fopen path
+constexpr const char* MANIFEST_URL    =
     "https://chaerem.github.io/clawdputer/roms-manifest.txt";
-constexpr size_t      ROM_MAX_BYTES = 256 * 1024;
+// Downloader-only cap. Streaming playback from SD has no cap — gnuboy
+// keeps two banks live and pages the rest in on demand.
+constexpr size_t      ROM_DOWNLOAD_MAX = 8 * 1024 * 1024;
 
 enum class Core { Unknown, Gameboy };
 
@@ -85,13 +94,11 @@ struct PickerEntry {
 };
 
 struct PlayState {
-    uint16_t* framebuf = nullptr;   // 160×144 RGB565 for GnuBoy
-    uint8_t*  rom      = nullptr;
-    size_t    romLen   = 0;
+    uint16_t*   framebuf = nullptr;   // 160×144 RGB565 for GnuBoy
     std::string romName;
-    std::string savePath;
-    int       pad        = 0;
-    uint32_t  lastSaveMs = 0;
+    std::string savePath;              // POSIX-VFS path passed to gnuboy
+    int         pad        = 0;
+    uint32_t    lastSaveMs = 0;
 };
 
 Stage                    g_stage = Stage::Picker;
@@ -293,8 +300,8 @@ bool downloadRom(const std::string& filename, const std::string& url) {
     }
 
     int total = http.getSize();
-    if (total > 0 && (size_t)total > ROM_MAX_BYTES) {
-        g_errorMsg = "ROM > 256 KB"; http.end(); restoreUi(guard); return false;
+    if (total > 0 && (size_t)total > ROM_DOWNLOAD_MAX) {
+        g_errorMsg = "ROM > 8 MB cap"; http.end(); restoreUi(guard); return false;
     }
 
     File out = SD.open(path.c_str(), FILE_WRITE);
@@ -313,8 +320,8 @@ bool downloadRom(const std::string& filename, const std::string& url) {
         if (avail) {
             int n = stream->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
             if (n <= 0) break;
-            if ((size_t)(got + n) > ROM_MAX_BYTES) {
-                g_errorMsg = "ROM > 256 KB";
+            if ((size_t)(got + n) > ROM_DOWNLOAD_MAX) {
+                g_errorMsg = "ROM > 8 MB cap";
                 out.close(); SD.remove(path.c_str()); http.end();
                 restoreUi(guard);
                 return false;
@@ -351,37 +358,12 @@ bool downloadRom(const std::string& filename, const std::string& url) {
     return true;
 }
 
-bool loadRom(const std::string& filename) {
+bool romFileExists(const std::string& filename) {
     std::string path = std::string(ROMS_DIR) + "/" + filename;
-    File f = SD.open(path.c_str());
-    if (!f) { g_errorMsg = "open failed: " + filename; return false; }
-    size_t sz = f.size();
-    if (sz == 0 || sz > ROM_MAX_BYTES) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "rom %u bytes > %u cap",
-                 (unsigned)sz, (unsigned)ROM_MAX_BYTES);
-        g_errorMsg = buf;
-        f.close();
+    if (!SD.exists(path.c_str())) {
+        g_errorMsg = "not on SD: " + filename;
         return false;
     }
-    g_play.rom = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_8BIT);
-    if (!g_play.rom) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "alloc %u failed (largest=%u)",
-                 (unsigned)sz, (unsigned)ESP.getMaxAllocHeap());
-        g_errorMsg = buf;
-        f.close();
-        return false;
-    }
-    size_t read = f.read(g_play.rom, sz);
-    f.close();
-    if (read != sz) {
-        g_errorMsg = "short read";
-        heap_caps_free(g_play.rom);
-        g_play.rom = nullptr;
-        return false;
-    }
-    g_play.romLen  = sz;
     g_play.romName = filename;
     return true;
 }
@@ -396,9 +378,7 @@ bool allocGbFramebuf() {
 }
 
 void freePlayState() {
-    if (g_play.rom)      { heap_caps_free(g_play.rom);      g_play.rom      = nullptr; }
     if (g_play.framebuf) { heap_caps_free(g_play.framebuf); g_play.framebuf = nullptr; }
-    g_play.romLen = 0;
     g_play.romName.clear();
     g_play.savePath.clear();
     g_play.pad = 0;
@@ -497,11 +477,15 @@ void runGameboyCore(const std::string& filename) {
     if (rc < 0) { g_errorMsg = "gnuboy_init failed"; goto fail; }
 
     gnuboy_set_framebuffer(g_play.framebuf);
-    rc = gnuboy_load_rom(g_play.rom, g_play.romLen);
-    if (rc < 0) { g_errorMsg = "rom load failed"; goto fail; }
+
+    {
+        std::string vfsPath = std::string(VFS_ROMS_DIR) + "/" + filename;
+        rc = gnuboy_load_rom_file(vfsPath.c_str());
+        if (rc < 0) { g_errorMsg = "rom load failed"; goto fail; }
+    }
 
     SD.mkdir(SAVES_DIR);
-    g_play.savePath = std::string(SAVES_DIR) + "/" + filename + ".sav";
+    g_play.savePath = std::string(VFS_SAVES_DIR) + "/" + filename + ".sav";
     gnuboy_load_sram(g_play.savePath.c_str());
 
     gnuboy_reset(true);
@@ -561,7 +545,7 @@ void startSelected() {
     g_errorMsg.clear();
     freePlayState();
 
-    if (!loadRom(entry.filename)) {
+    if (!romFileExists(entry.filename)) {
         g_stage = Stage::Error;
         g_dirty = true;
         return;
