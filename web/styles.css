@@ -265,6 +265,23 @@ code {
 
 .apps-list strong { color: var(--ink); }
 
+.reset-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.reset-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .page-foot {
   max-width: 1280px;
   margin: 0 auto;

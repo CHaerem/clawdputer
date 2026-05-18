@@ -29,6 +29,10 @@ firmware/                       ESP32 firmware (PlatformIO)
 host/                           Mac-side bridge daemon (Swift)
   Sources/clawd-bridge/         CoreBluetooth central + claude CLI runner
   install/                      launchd plist installer
+web/                            Browser simulator (GitHub Pages)
+  app.js, index.html, styles    240×135 canvas + JS reimplementations
+  apps.json                     generated catalog mirroring firmware apps
+tools/gen-web-manifest.py       parses firmware App {...} blocks → apps.json
 protocol/WIRE.md                authoritative wire-protocol spec
 README.md                       user-facing instructions
 ```
@@ -270,6 +274,42 @@ it (per cwd), not in clawdputer.
 - `claude` CLI conversation history per `CLAWD_CHAT_CWD` directory.
 - Nothing else yet. Future apps should use NVS via a small wrapper
   service when they need persistence.
+
+## Web demo (GitHub Pages)
+
+`web/` ships a browser simulator of the device at
+https://chaerem.github.io/clawdputer/. The display is a real 240×135
+canvas; apps are reimplemented in JavaScript with the same layouts and
+key bindings as the firmware. BLE, WiFi, the bridge daemon, and the
+`claude` CLI are stubbed — the simulated chat answers any prompt from a
+small keyword KB. All demo state (chat history, SSH hosts added in the
+demo, Buddy approve/deny counts, last-selected card) persists to the
+browser's `localStorage`.
+
+**Auto-adapting catalog.** `tools/gen-web-manifest.py` parses every
+`firmware/src/apps/<name>/<name>.cpp`, extracts the `App xxx_app = { … }`
+fields (id, name, description, hidden, keysAsArrows, services), and
+writes `web/apps.json`. At startup the JS calls `applyManifest()`:
+
+- JS apps in the manifest get name/description/hidden/keysAsArrows
+  overridden from firmware (so renaming an app in the .cpp updates the
+  tile automatically).
+- Firmware apps without a JS reimplementation get a generic stub tile
+  with the name, description, and source path.
+- JS apps that no longer exist in firmware are dropped from the launcher.
+
+The pages workflow (`.github/workflows/pages.yml`) regenerates
+`apps.json` before every deploy and triggers on
+`firmware/src/apps/**`, so a new app in firmware → new stub tile on the
+hosted demo on the next push. Run `python3 tools/gen-web-manifest.py`
+locally after editing firmware app metadata; the file is committed for
+file:// previews.
+
+To add a fully-interactive JS reimplementation of a new firmware app:
+edit `web/app.js`, define the app the same way the existing
+`buddy/chat/ssh/settings` ones are defined, and call `registerApp(...)`.
+The manifest overlay will then enrich it with the live firmware
+metadata.
 
 ## Keeping docs in sync
 
