@@ -15,7 +15,6 @@
 #include "core/registry.h"
 #include "services/ble.h"
 #include "services/identity.h"
-#include "services/github.h"
 #include "services/power.h"
 #include "services/settings.h"
 #include "services/updater.h"
@@ -142,42 +141,6 @@ void actProbeTls() {
 
     char t[48];
     snprintf(t, sizeof(t), code == 200 ? "TLS ok: %d" : "TLS fail: %d", code);
-    toast(t);
-}
-
-void actProbeGithub() {
-    Serial.println("[probe] === github POST probe start ===");
-    bool hadCanvas = ui::canvasActive();
-    bool blePaused = ble::isPaused();
-    if (hadCanvas) ui::releaseCanvas();
-    if (!blePaused) ble::pause();
-    delay(100);
-    Serial.printf("[probe] pre: free=%u largest=%u\n",
-                  (unsigned)ESP.getFreeHeap(),
-                  (unsigned)ESP.getMaxAllocHeap());
-
-    auto r = github::submitIssue(
-        "[probe] github POST from normal boot",
-        "Submitted from Settings → probe github POST.\n"
-        "Validates Phase 2 of arduino-as-IDF-component TLS work.",
-        "telemetry");
-
-    Serial.printf("[probe] post: free=%u largest=%u\n",
-                  (unsigned)ESP.getFreeHeap(),
-                  (unsigned)ESP.getMaxAllocHeap());
-
-    if (!blePaused) ble::resume();
-    if (hadCanvas) ui::tryAcquireCanvas();
-
-    char t[64];
-    if (r.ok) {
-        snprintf(t, sizeof(t), "issue #%d submitted", r.issueNumber);
-        Serial.printf("[probe] OK #%d %s\n", r.issueNumber, r.issueUrl.c_str());
-    } else {
-        snprintf(t, sizeof(t), "submit fail: %s", r.error.c_str());
-        Serial.printf("[probe] FAIL: %s\n", r.error.c_str());
-    }
-    Serial.println("[probe] === github POST probe end ===");
     toast(t);
 }
 
@@ -367,7 +330,6 @@ void rebuild() {
 
         g_items.push_back(act("check & install →", actInstallUpdate));
         g_items.push_back(act("probe TLS (serial) →", actProbeTls));
-        g_items.push_back(act("probe github POST →", actProbeGithub));
     }
 
     // ── IDENTITY ──
