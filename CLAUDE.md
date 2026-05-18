@@ -305,6 +305,15 @@ hosted demo on the next push. Run `python3 tools/gen-web-manifest.py`
 locally after editing firmware app metadata; the file is committed for
 file:// previews.
 
+**PR previews.** `.github/workflows/pr-preview.yml` deploys every PR
+touching `web/**` or `firmware/src/apps/**` to
+`https://chaerem.github.io/clawdputer/pr-preview/pr-<N>/`, posts a
+sticky comment on the PR with the link, and cleans up on close. Both
+the main and preview deploys publish to the `gh-pages` branch
+(GitHub Pages source is "Deploy from a branch" → `gh-pages` → `/`);
+the main deploy uses `keep_files: true` so PR preview subdirectories
+survive.
+
 To add a fully-interactive JS reimplementation of a new firmware app:
 edit `web/app.js`, define the app the same way the existing
 `buddy/chat/ssh/settings` ones are defined, and call `registerApp(...)`.

@@ -1,0 +1,44 @@
+name: pr-preview
+
+# Deploy each PR's web/ to a subdirectory of the gh-pages branch so
+# reviewers can interact with the demo at
+#   https://chaerem.github.io/clawdputer/pr-preview/pr-<N>/
+# Cleaned up automatically on PR close/merge.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    paths:
+      - "web/**"
+      - "firmware/src/apps/**"
+      - "tools/gen-web-manifest.py"
+      - ".github/workflows/pr-preview.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    # Only run for PRs from the same repo — fork PRs can't push to gh-pages
+    # and would fail with a permissions error.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate firmware app manifest
+        if: github.event.action != 'closed'
+        run: python3 tools/gen-web-manifest.py
+
+      - name: Deploy preview
+        uses: rossjrw/pr-preview-action@v1
+        with:
+          source-dir: ./web
+          umbrella-dir: pr-preview
+          action: auto
+          preview-branch: gh-pages
