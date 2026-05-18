@@ -161,6 +161,11 @@ On device, `services/updater.cpp`:
   60 s after boot, then every 6 h. When a newer SHA is published, status
   flips to `UpdateAvailable` and the statusbar shows a yellow ↑ — no
   flash happens until the user taps "check & install →".
+  Caveat: the bg check is heap-gated (skips if largest free block < 28 KB,
+  matching mbedTLS handshake needs). On this hardware that gate is rarely
+  open in normal-boot steady-state — the indicator is mostly decorative
+  in practice. The manual "check & install →" path always works because
+  `installNow()` pauses BLE + canvas first.
 - compares the SHA against `CLAWD_BUILD_SHA` (set by
   `firmware/scripts/embed_version.py` from `git rev-parse --short HEAD`)
 - streams `firmware.bin` into the inactive OTA partition via HTTPUpdate
