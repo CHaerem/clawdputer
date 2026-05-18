@@ -1,0 +1,30 @@
+# clawdputer / retro app — ROM source manifests
+#
+# Copy this file to your SD card as /roms/sources.txt to override the
+# firmware's compiled-in defaults. Each non-comment line is a manifest URL.
+#
+# A manifest URL is either:
+#   - An HTML page — the downloader scrapes <a href> values pointing at
+#     supported ROM extensions (.gb, .gbc, plus future cores).
+#   - A plain-text file — one ROM URL per line, optionally prefixed with
+#     "Display name | " to override the displayed name. '#' starts a
+#     line comment.
+#
+# Optional "Display | URL" syntax works in this file too — useful if a
+# URL is opaque.
+
+# --- ROM sites ---
+Game Boy ROMs | https://www.romsgames.net/roms/gameboy/
+Game Boy Color ROMs | https://www.romsgames.net/roms/gameboy-color/
+
+# --- Homebrew (legit, public-domain games) ---
+Homebrew Hub — Game Boy | https://gbhh.avivace.com/
+
+# --- Your own manifest (example) ---
+# Host a plain-text list of URLs on a gist / pastebin / your own server:
+# My Game Boy library | https://gist.githubusercontent.com/USER/HASH/raw/manifest.txt
+#
+# Sample manifest contents (one URL per line):
+#   https://example.com/roms/tetris.gb
+#   Pokemon Red | https://example.com/roms/pokemon_red.gbc
+#   # comments here ignored
