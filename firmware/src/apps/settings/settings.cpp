@@ -82,18 +82,14 @@ void actSleepNow() {
 }
 
 void actInstallUpdate() {
-    // Triggers a recovery-boot OTA: device reboots, fetches the manifest in
-    // a minimal env (where the heap isn't fragmented enough to block the
-    // mbedTLS handshake), and flashes if a newer SHA is published. If
-    // there's nothing newer, recovery just reboots back to normal mode.
-    toast("rebooting to install…");
-    delay(600);
-    updater::installNow();   // never returns
+    // Runs a live OTA in place: pauses BLE + releases canvas + pauses SD,
+    // fetches the manifest, streams firmware.bin, reboots into the new
+    // image on success. Returns to the caller only on failure.
+    updater::installNow();
 }
 
-// Experiment: can we do a github.com TLS handshake from a fully-booted
-// firmware by shrinking the mbedTLS fragment buffers at runtime, instead
-// of needing the recovery-boot dance? Results logged over serial.
+// Quick TLS sanity check (GET to github.com) — useful when bisecting
+// mbedTLS / IDF-component build changes. Results logged over serial.
 void actProbeTls() {
     Serial.println("[probe] === TLS probe start ===");
     bool hadCanvas = ui::canvasActive();

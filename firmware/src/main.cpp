@@ -174,17 +174,6 @@ void setup() {
     Serial.println("[clawdputer] boot");
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
-    // Recovery-boot OTA: if scheduleRecoveryUpdate() was called before the
-    // last reboot, run the flash now while the heap is still pristine —
-    // before the canvas sprite, BLE, or apps have a chance to fragment it.
-    // mbedTLS needs ~36 KB contiguous for the github.com handshake; once
-    // the rest of setup() has run, the largest free block drops to ~31 KB.
-    // runRecovery() never returns — it reboots either way.
-    if (updater::isRecoveryBoot()) {
-        Serial.println("[clawdputer] entering OTA recovery mode");
-        updater::runRecovery();
-    }
-
     // Touching ui::display() triggers the canvas allocation so we know up
     // front whether the backbuffer is available. Allocated first because
     // the sprite needs a single large contiguous heap block — once BLE

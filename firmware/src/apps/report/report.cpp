@@ -251,14 +251,13 @@ void doSubmit() {
         return;
     }
 
-    // Live submit failed (offline, low heap, http error). Fall back to NVS
-    // queue + recovery boot so the issue still gets filed eventually.
+    // Live submit failed (offline, http error). Queue for later — the
+    // updater's opportunistic drain (updater::tick, every 30 s when wifi
+    // is up) will retry until it lands.
     telemetry::enqueue(g_title, body, kindLabel());
     g_resultOk  = false;
-    g_resultMsg = r.error.empty() ? "submit failed" : r.error;
-    render();
-    delay(1200);
-    updater::scheduleRecoveryUpdate();   // never returns
+    g_resultMsg = r.error.empty() ? "submit failed (queued)" : r.error;
+    g_dirty     = true;
 }
 
 void onEnter() {
