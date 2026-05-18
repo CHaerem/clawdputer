@@ -1,13 +1,16 @@
-// GitOps self-update: on user request, reboot into a minimal recovery env
-// and there fetch the project's "latest" GitHub release manifest. If newer
-// than the running build, stream firmware.bin into the inactive OTA
-// partition via HTTPUpdate and reboot into it.
+// GitOps self-update: on user request, fetch the project's "latest" GitHub
+// release manifest. If newer than the running build, stream firmware.bin
+// into the inactive OTA partition via HTTPUpdate and reboot into it.
 //
-// Why recovery-boot? The stock Arduino-ESP32 2.x mbedTLS wants ~36 KB
-// contiguous heap for the github.com handshake. The Cardputer has no PSRAM
-// and a fully-booted firmware fragments internal heap below that. A fresh
-// boot that skips the canvas sprite, BLE, and apps gives ~65 KB largest
-// free block — handshake fits. See CLAUDE.md "Recovery-boot OTA".
+// As of Phase 4 this runs live from normal boot — the IDF-component build
+// with mbedTLS DYNAMIC_BUFFER fits the github.com handshake in fragmented
+// heap, so we no longer need the two-reboot recovery dance. installNow()
+// pauses BLE + releases the canvas to free contiguous bytes for HTTPUpdate's
+// internal buffers, then flashes in place.
+//
+// scheduleRecoveryUpdate() + runRecoveryImpl() are kept as a fallback for
+// pathological cases (low heap, etc.) but no longer the primary path. They
+// will be deleted in a follow-up once the live path proves stable.
 //
 // Rollback: before flashing we mark a "pending" flag in NVS. The new image
 // must run stably for HEALTH_CONFIRM_MS to clear the flag. Three failed
@@ -24,8 +27,11 @@
 #include <esp_ota_ops.h>
 #include <time.h>
 
-#include "wifi.h"
+#include "ble.h"
+#include "sd.h"
 #include "telemetry.h"
+#include "wifi.h"
+#include "ui/canvas.h"
 
 #ifndef CLAWD_BUILD_SHA
 #define CLAWD_BUILD_SHA "unknown"
@@ -95,17 +101,15 @@ void persistResult() {
     prefs.end();
 }
 
-// Recovery-mode painter — header is "OTA RECOVERY" and the body shows
-// the current phase plus a progress bar. Draws directly to the LCD; never
-// touches the canvas sprite (which is what we skipped allocating to keep
-// the heap unfragmented for the TLS handshake).
-void drawRecovery(const char* phase, int pct) {
+// Direct-to-LCD progress painter (no canvas — caller is expected to have
+// released it to free contiguous heap for the TLS handshake + HTTPUpdate).
+void drawProgress(const char* header, const char* phase, int pct) {
     auto& d = M5Cardputer.Display;
     d.fillScreen(BLACK);
     d.setTextSize(2);
     d.setTextColor(WHITE);
     d.setCursor(8, 8);
-    d.print("OTA RECOVERY");
+    d.print(header);
     d.setTextSize(1);
     d.setCursor(8, 36);
     d.print(phase);
@@ -118,6 +122,14 @@ void drawRecovery(const char* phase, int pct) {
     d.setCursor(8, 88);
     d.setTextColor(0x7BEF);
     d.print("do not unplug");
+}
+
+void drawRecovery(const char* phase, int pct) {
+    drawProgress("OTA RECOVERY", phase, pct);
+}
+
+void drawInstall(const char* phase, int pct) {
+    drawProgress("OTA UPDATE", phase, pct);
 }
 
 void rollbackNow() {
@@ -174,17 +186,30 @@ bool fetchManifest(WiFiClientSecure& client,
     return true;
 }
 
-// Recovery-mode globals — used by onRecoveryProgress so the painter knows
-// which phase string to keep above the bar during the flash.
-const char* g_recoveryPhase = "downloading…";
+// Shared progress state for both the live and recovery flash paths —
+// HTTPUpdate's onProgress callback has no userdata pointer, so the painter
+// reads these globals.
+const char* g_progressHeader = "OTA UPDATE";
+const char* g_progressPhase  = "downloading…";
 
-void onRecoveryProgress(int cur, int total) {
+void onFlashProgress(int cur, int total) {
     if (total <= 0) return;
     static int lastPct = -1;
     int pct = (int)((int64_t)cur * 100 / total);
     if (pct == lastPct) return;
     lastPct = pct;
-    drawRecovery(g_recoveryPhase, pct);
+    drawProgress(g_progressHeader, g_progressPhase, pct);
+}
+
+// Pre-flash NVS bookkeeping. Used by both the live and recovery paths so
+// the boot-attempt rollback works regardless of how we flashed.
+void markFlashPending(const std::string& targetSha) {
+    Preferences prefs;
+    prefs.begin("updater", false);
+    prefs.putBool("pending", true);
+    prefs.putInt("boots", 0);
+    prefs.putString("target", targetSha.c_str());
+    prefs.end();
 }
 
 void persistRecoveryFailure(const char* reason) {
@@ -259,21 +284,14 @@ void persistRecoveryFailure(const char* reason) {
 
     Serial.printf("[updater] recovery: flashing %s (have %s)\n",
                   latest.c_str(), CLAWD_BUILD_SHA);
-    g_recoveryPhase = "downloading…";
-    drawRecovery(g_recoveryPhase, 0);
+    g_progressHeader = "OTA RECOVERY";
+    g_progressPhase  = "downloading…";
+    drawRecovery(g_progressPhase, 0);
 
-    // Same NVS bookkeeping as the normal-mode flash path so rollback works.
-    {
-        Preferences prefs;
-        prefs.begin("updater", false);
-        prefs.putBool("pending", true);
-        prefs.putInt("boots", 0);
-        prefs.putString("target", latest.c_str());
-        prefs.end();
-    }
+    markFlashPending(latest);
 
     httpUpdate.rebootOnUpdate(true);
-    httpUpdate.onProgress(onRecoveryProgress);
+    httpUpdate.onProgress(onFlashProgress);
     httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
     auto ret = httpUpdate.update(client, FIRMWARE_URL);
     // Success reboots inside httpUpdate.update(). Anything below is failure.
@@ -357,13 +375,124 @@ void tick() {
         prefs.end();
         g_confirmed = true;
     }
-    // Background polling of github.com is intentionally NOT done. The TLS
-    // handshake can't fit in the fragmented heap of a running firmware on
-    // this hardware (see CLAUDE.md "Recovery-boot OTA"). The only working
-    // channel is recovery-boot, triggered by the user from Settings.
+
+    // Opportunistic telemetry flush — a queued report from a failed live
+    // submit will get filed the next time wifi is available and we have a
+    // free heartbeat. Cheap: drain() is a no-op when the queue is empty.
+    static uint32_t lastDrainMs = 0;
+    if (millis() - lastDrainMs > 30000 && wifi::isConnected()
+        && telemetry::pending()) {
+        lastDrainMs = millis();
+        telemetry::drain();
+    }
 }
 
-void installNow() { scheduleRecoveryUpdate(); }   // never returns
+void installNow() {
+    // Live OTA from normal boot. With mbedTLS DYNAMIC_BUFFER the github.com
+    // handshake fits in fragmented heap, so we pause BLE + release canvas
+    // to free contiguous bytes for HTTPUpdate's internal buffers, then
+    // flash in place. Single reboot via HTTPUpdate.rebootOnUpdate(true) on
+    // success. On failure we restore the UI and return to the caller.
+
+    bool hadCanvas  = ui::canvasActive();
+    bool wasBlePaused = ble::isPaused();
+    bool wasSdPaused  = sd::isPaused();
+    if (hadCanvas)     ui::releaseCanvas();
+    if (!wasBlePaused) ble::pause();
+    if (!wasSdPaused)  sd::pause();
+    delay(100);
+
+    Serial.printf("[updater] live install: free=%u largest=%u\n",
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+
+    auto restoreUi = [&]() {
+        if (!wasSdPaused)  sd::resume();
+        if (!wasBlePaused) ble::resume();
+        if (hadCanvas)     ui::tryAcquireCanvas();
+    };
+
+    if (!wifi::isConnected()) {
+        drawInstall("waiting for wifi…", -1);
+        uint32_t deadline = millis() + 10000;
+        while (!wifi::isConnected() && millis() < deadline) delay(100);
+    }
+    if (!wifi::isConnected()) {
+        g_status    = Status::Failed;
+        g_lastError = "wifi not connected";
+        persistResult();
+        drawInstall("wifi unavailable", -1);
+        delay(1800);
+        restoreUi();
+        return;
+    }
+
+    drawInstall("checking manifest…", -1);
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    std::string latest, builtAt;
+    if (!fetchManifest(client, latest, builtAt)) {
+        g_status    = Status::Failed;
+        // g_lastError set by fetchManifest
+        persistResult();
+        drawInstall(g_lastError.c_str(), -1);
+        delay(2200);
+        restoreUi();
+        return;
+    }
+
+    if (latest == CLAWD_BUILD_SHA) {
+        g_status         = Status::UpToDate;
+        g_latest         = latest;
+        g_latestBuiltAt  = builtAt;
+        g_lastError      = "";
+        g_lastCheckEpoch = (uint32_t)time(nullptr);
+        persistResult();
+        drawInstall("already up to date", 100);
+        delay(1500);
+        restoreUi();
+        return;
+    }
+
+    Serial.printf("[updater] live: flashing %s (have %s)\n",
+                  latest.c_str(), CLAWD_BUILD_SHA);
+    g_status        = Status::Downloading;
+    g_latest        = latest;
+    g_latestBuiltAt = builtAt;
+    g_progressHeader = "OTA UPDATE";
+    g_progressPhase  = "downloading…";
+    drawInstall(g_progressPhase, 0);
+
+    markFlashPending(latest);
+
+    httpUpdate.rebootOnUpdate(true);
+    httpUpdate.onProgress(onFlashProgress);
+    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    auto ret = httpUpdate.update(client, FIRMWARE_URL);
+    // Success reboots inside httpUpdate.update(). Anything below is failure.
+    (void)ret;
+
+    std::string err = httpUpdate.getLastErrorString().c_str();
+    if (err.empty()) err = "flash failed";
+    g_status    = Status::Failed;
+    g_lastError = err;
+    persistResult();
+
+    // Clear pending — flash never completed, so we shouldn't roll back on
+    // the next boot.
+    {
+        Preferences prefs;
+        prefs.begin("updater", false);
+        prefs.putBool("pending", false);
+        prefs.putInt("boots", 0);
+        prefs.end();
+    }
+
+    drawInstall(err.c_str(), -1);
+    delay(2500);
+    restoreUi();
+}
 
 Status      status()           { return g_status; }
 const char* statusText()       { return statusTextFor(g_status); }

@@ -3,11 +3,9 @@
 #include <string>
 
 // Last-wins NVS slot for an issue that couldn't be filed at the time it
-// happened — typically because the github.com TLS handshake doesn't fit
-// in the fragmented heap of a fully-booted firmware (see CLAUDE.md
-// "Recovery-boot OTA"). The recovery boot drains the slot after its
-// manifest fetch succeeds, since the heap there is unfragmented enough
-// for the POST to go through.
+// happened — typically a transient WiFi outage or rare heap pressure
+// when the report app tries to submit live. `updater::tick()` drains the
+// slot opportunistically (every ~30 s when WiFi is up).
 
 namespace telemetry {
 
