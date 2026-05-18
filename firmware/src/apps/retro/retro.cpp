@@ -301,6 +301,19 @@ void scanRoms() {
     }
 }
 
+// Baked-in defaults shown when /roms/sources.txt is absent. The user can
+// override by dropping their own sources.txt on the SD card; see
+// firmware/data/sources.txt.example for the format.
+struct DefaultSource { const char* name; const char* url; };
+constexpr DefaultSource kDefaultSources[] = {
+    { "Game Boy ROMs (romsgames.net)",
+      "https://www.romsgames.net/roms/gameboy/" },
+    { "Game Boy Color ROMs (romsgames.net)",
+      "https://www.romsgames.net/roms/gameboy-color/" },
+    { "Homebrew Hub — Game Boy",
+      "https://gbhh.avivace.com/" },
+};
+
 void buildSourcesList() {
     g_sources.items.clear();
     g_sources.selected  = 0;
@@ -319,8 +332,11 @@ void buildSourcesList() {
         f.close();
     }
     if (g_sources.items.empty()) {
-        g_sources.items.push_back(
-            {"(no /roms/sources.txt — see README)", "", false});
+        // Fall back to compiled-in defaults so the downloader works without
+        // any SD-side setup.
+        for (const auto& d : kDefaultSources) {
+            g_sources.items.push_back({d.name, d.url});
+        }
     }
 }
 
