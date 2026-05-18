@@ -49,6 +49,12 @@ constexpr uint32_t HEALTH_CONFIRM_MS    = 30UL * 1000UL;
 constexpr int      MAX_BOOT_ATTEMPTS    = 3;
 constexpr uint32_t BG_FIRST_CHECK_MS    = 60UL * 1000UL;            // 60s after boot
 constexpr uint32_t BG_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL; // 6h thereafter
+// Even with mbedTLS DYNAMIC_BUFFER the github.com handshake needs a
+// contiguous working block. Empirically ~12 KB largest free isn't enough
+// and crashes the wifi driver. Skip the check below this floor and try
+// again next interval — the manual "check & install →" path pauses BLE
+// + canvas which clears the headroom regardless.
+constexpr size_t   BG_MIN_LARGEST_BLOCK = 28UL * 1024UL;
 
 updater::Status g_status      = updater::Status::Idle;
 uint32_t        g_lastCheckMs = 0;
@@ -214,10 +220,10 @@ TaskHandle_t g_bgTask = nullptr;
 void backgroundCheckTask(void*) {
     vTaskDelay(pdMS_TO_TICKS(BG_FIRST_CHECK_MS));
     for (;;) {
-        if (wifi::isConnected()) {
+        size_t largest = ESP.getMaxAllocHeap();
+        if (wifi::isConnected() && largest >= BG_MIN_LARGEST_BLOCK) {
             Serial.printf("[updater] bg check: free=%u largest=%u\n",
-                          (unsigned)ESP.getFreeHeap(),
-                          (unsigned)ESP.getMaxAllocHeap());
+                          (unsigned)ESP.getFreeHeap(), (unsigned)largest);
             WiFiClientSecure client;
             client.setInsecure();
             std::string latest, builtAt;
@@ -241,6 +247,11 @@ void backgroundCheckTask(void*) {
                 // Don't persist failure — it's likely transient (wifi flake).
                 // The last good status stays in NVS so the UI doesn't flap.
             }
+        } else if (wifi::isConnected()) {
+            // WiFi up but heap is too fragmented for a safe TLS handshake.
+            // Skip silently-ish — log once per interval so we can see it.
+            Serial.printf("[updater] bg check skipped: largest=%u < %u\n",
+                          (unsigned)largest, (unsigned)BG_MIN_LARGEST_BLOCK);
         }
         vTaskDelay(pdMS_TO_TICKS(BG_CHECK_INTERVAL_MS));
     }
@@ -284,10 +295,11 @@ void begin() {
     }
 
     // Kick off the periodic background manifest check. Low priority — it
-    // shouldn't compete with UI or BLE for CPU.
+    // shouldn't compete with UI or BLE for CPU. 12 KB stack: mbedTLS
+    // handshake frames are deep and 8 KB was tight.
     if (!g_bgTask) {
         xTaskCreate(backgroundCheckTask, "updater_bg",
-                    8192, nullptr, 1, &g_bgTask);
+                    12288, nullptr, 1, &g_bgTask);
     }
 }
 
