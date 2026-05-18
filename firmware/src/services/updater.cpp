@@ -210,51 +210,75 @@ void markFlashPending(const std::string& targetSha) {
     prefs.end();
 }
 
-// Background check task — periodically fetches the manifest so the UI can
-// show "update available" without the user blindly tapping "check & install".
-// Runs as its own low-priority FreeRTOS task because the TLS fetch can take
-// a few seconds; doing it from updater::tick() on the main loop would stall
-// the UI. mbedTLS DYNAMIC_BUFFER makes this safe to do live.
-TaskHandle_t g_bgTask = nullptr;
+// Run the manifest check (no flash) on the main thread, pausing BLE and
+// the canvas if needed to free contiguous heap for the TLS handshake.
+// Returns true if the fetch completed (regardless of whether a new version
+// was found); false if we couldn't even attempt it.
+bool runBackgroundCheck() {
+    if (!wifi::isConnected()) return false;
 
-void backgroundCheckTask(void*) {
-    vTaskDelay(pdMS_TO_TICKS(BG_FIRST_CHECK_MS));
-    for (;;) {
-        size_t largest = ESP.getMaxAllocHeap();
-        if (wifi::isConnected() && largest >= BG_MIN_LARGEST_BLOCK) {
-            Serial.printf("[updater] bg check: free=%u largest=%u\n",
-                          (unsigned)ESP.getFreeHeap(), (unsigned)largest);
-            WiFiClientSecure client;
-            client.setInsecure();
-            std::string latest, builtAt;
-            if (fetchManifest(client, latest, builtAt)) {
-                g_latest         = latest;
-                g_latestBuiltAt  = builtAt;
-                g_lastError      = "";
-                g_lastCheckMs    = millis();
-                g_lastCheckEpoch = (uint32_t)time(nullptr);
-                if (latest == CLAWD_BUILD_SHA) {
-                    g_status = updater::Status::UpToDate;
-                } else {
-                    g_status = updater::Status::UpdateAvailable;
-                    Serial.printf("[updater] bg: update available %s -> %s\n",
-                                  CLAWD_BUILD_SHA, latest.c_str());
-                }
-                persistResult();
-            } else {
-                Serial.printf("[updater] bg check failed: %s\n",
-                              g_lastError.c_str());
-                // Don't persist failure — it's likely transient (wifi flake).
-                // The last good status stays in NVS so the UI doesn't flap.
-            }
-        } else if (wifi::isConnected()) {
-            // WiFi up but heap is too fragmented for a safe TLS handshake.
-            // Skip silently-ish — log once per interval so we can see it.
-            Serial.printf("[updater] bg check skipped: largest=%u < %u\n",
-                          (unsigned)largest, (unsigned)BG_MIN_LARGEST_BLOCK);
+    bool hadCanvas    = ui::canvasActive();
+    bool wasBlePaused = ble::isPaused();
+
+    // Only disturb BLE if no peer is actually using it. The buddy protocol
+    // and clawd-bridge link each show up as NusLink / BridgeLink.
+    bool blePeerActive = ble::isConnected(EventSource::NusLink) ||
+                         ble::isConnected(EventSource::BridgeLink);
+
+    size_t largest = ESP.getMaxAllocHeap();
+    if (largest < BG_MIN_LARGEST_BLOCK) {
+        if (blePeerActive) {
+            Serial.printf("[updater] bg skip: largest=%u, BLE peer active\n",
+                          (unsigned)largest);
+            return false;
         }
-        vTaskDelay(pdMS_TO_TICKS(BG_CHECK_INTERVAL_MS));
+        // Free contiguous space.
+        if (hadCanvas)     ui::releaseCanvas();
+        if (!wasBlePaused) ble::pause();
+        delay(50);
+        largest = ESP.getMaxAllocHeap();
     }
+
+    auto restore = [&]() {
+        if (!wasBlePaused) ble::resume();
+        if (hadCanvas)     ui::tryAcquireCanvas();
+    };
+
+    if (largest < BG_MIN_LARGEST_BLOCK) {
+        Serial.printf("[updater] bg skip: even after pause largest=%u\n",
+                      (unsigned)largest);
+        restore();
+        return false;
+    }
+
+    Serial.printf("[updater] bg check: free=%u largest=%u\n",
+                  (unsigned)ESP.getFreeHeap(), (unsigned)largest);
+    WiFiClientSecure client;
+    client.setInsecure();
+    std::string latest, builtAt;
+    bool ok = fetchManifest(client, latest, builtAt);
+    if (ok) {
+        g_latest         = latest;
+        g_latestBuiltAt  = builtAt;
+        g_lastError      = "";
+        g_lastCheckMs    = millis();
+        g_lastCheckEpoch = (uint32_t)time(nullptr);
+        if (latest == CLAWD_BUILD_SHA) {
+            g_status = updater::Status::UpToDate;
+        } else {
+            g_status = updater::Status::UpdateAvailable;
+            Serial.printf("[updater] bg: update available %s -> %s\n",
+                          CLAWD_BUILD_SHA, latest.c_str());
+        }
+        persistResult();
+    } else {
+        Serial.printf("[updater] bg check failed: %s\n",
+                      g_lastError.c_str());
+        // Don't persist failure — likely transient (wifi flake). Last good
+        // status stays in NVS so the UI doesn't flap.
+    }
+    restore();
+    return true;
 }
 
 }  // namespace
@@ -294,13 +318,6 @@ void begin() {
         prefs.end();
     }
 
-    // Kick off the periodic background manifest check. Low priority — it
-    // shouldn't compete with UI or BLE for CPU. 12 KB stack: mbedTLS
-    // handshake frames are deep and 8 KB was tight.
-    if (!g_bgTask) {
-        xTaskCreate(backgroundCheckTask, "updater_bg",
-                    12288, nullptr, 1, &g_bgTask);
-    }
 }
 
 void tick() {
@@ -333,6 +350,23 @@ void tick() {
         && telemetry::pending()) {
         lastDrainMs = millis();
         telemetry::drain();
+    }
+
+    // Periodic update check: BG_FIRST_CHECK_MS after boot, then every
+    // BG_CHECK_INTERVAL_MS. Runs on the main thread so it can safely pause
+    // BLE + canvas (the only way to free enough contiguous heap for the
+    // mbedTLS handshake on this hardware). UI freezes for ~2-3 s during
+    // the fetch; acceptable at this cadence.
+    static uint32_t lastCheckAttemptMs = 0;
+    static bool     didFirstCheck      = false;
+    uint32_t        now                = millis();
+    uint32_t        dueAt              = didFirstCheck
+                                       ? lastCheckAttemptMs + BG_CHECK_INTERVAL_MS
+                                       : BG_FIRST_CHECK_MS;
+    if (now >= dueAt && wifi::isConnected()) {
+        lastCheckAttemptMs = now;
+        didFirstCheck      = true;
+        runBackgroundCheck();
     }
 }
 
