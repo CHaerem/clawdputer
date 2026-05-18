@@ -33,19 +33,13 @@ void begin() {
 bool isAvailable() { return g_available && !g_paused; }
 
 void pause() {
-    if (g_paused) return;
-    SD.end();
-    SPI.end();
+    // IDF-component build: SD.end() asserts in SPI.endTransaction (xQueueSend
+    // with NULL on a non-zero-itemsize queue). Skip teardown until rooted out.
     g_paused = true;
-    Serial.println("[sd] paused");
 }
 
 void resume() {
-    if (!g_paused) return;
-    SPI.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
-    g_available = SD.begin(SD_SPI_CS_PIN, SPI, 25000000);
-    g_paused    = false;
-    Serial.printf("[sd] resumed, available=%d\n", (int)g_available);
+    g_paused = false;
 }
 
 bool isPaused() { return g_paused; }

@@ -3,6 +3,13 @@
 .DS_Store
 *.swp
 
+# PlatformIO IDF-component build: regenerated from sdkconfig.defaults each build
+firmware/sdkconfig.cardputer
+# Auto-generated src/CMakeLists.txt (PIO writes this if missing)
+firmware/src/CMakeLists.txt
+# Local serial-read helper
+.read_serial.py
+
 # Local Claude Code state — never commit
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
