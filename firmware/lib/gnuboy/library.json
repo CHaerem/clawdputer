@@ -1,0 +1,13 @@
+{
+  "name": "gnuboy",
+  "version": "1.0.0",
+  "description": "GnuBoy Game Boy / Color emulator core (GPLv2). Vendored from geo-tp/Cardputer-Game-Station-Emulators/src/gbc/gnuboy. Patched only with library-scoped warning flags to keep -Werror clean elsewhere.",
+  "build": {
+    "flags": [
+      "-Wno-error=sizeof-pointer-memaccess",
+      "-Wno-error=misleading-indentation",
+      "-Wno-error=maybe-uninitialized",
+      "-O3"
+    ]
+  }
+}
