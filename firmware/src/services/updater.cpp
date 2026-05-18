@@ -1,16 +1,15 @@
-// GitOps self-update: on user request, fetch the project's "latest" GitHub
-// release manifest. If newer than the running build, stream firmware.bin
-// into the inactive OTA partition via HTTPUpdate and reboot into it.
+// GitOps self-update: fetch the project's "latest" GitHub release manifest.
+// If newer than the running build, stream firmware.bin into the inactive
+// OTA partition via HTTPUpdate and reboot into it.
 //
-// As of Phase 4 this runs live from normal boot — the IDF-component build
-// with mbedTLS DYNAMIC_BUFFER fits the github.com handshake in fragmented
-// heap, so we no longer need the two-reboot recovery dance. installNow()
-// pauses BLE + releases the canvas to free contiguous bytes for HTTPUpdate's
-// internal buffers, then flashes in place.
+// Runs live from normal boot — the IDF-component build with mbedTLS
+// DYNAMIC_BUFFER fits the github.com handshake in fragmented heap.
+// installNow() pauses BLE + releases the canvas + pauses SD to free
+// contiguous bytes for HTTPUpdate's internal buffers, then flashes in place.
 //
-// scheduleRecoveryUpdate() + runRecoveryImpl() are kept as a fallback for
-// pathological cases (low heap, etc.) but no longer the primary path. They
-// will be deleted in a follow-up once the live path proves stable.
+// A background FreeRTOS task (updater_bg) polls the manifest periodically so
+// the statusbar can show "update available" without the user blindly tapping
+// "check & install →".
 //
 // Rollback: before flashing we mark a "pending" flag in NVS. The new image
 // must run stably for HEALTH_CONFIRM_MS to clear the flag. Three failed
@@ -104,14 +103,14 @@ void persistResult() {
 }
 
 // Direct-to-LCD progress painter (no canvas — caller is expected to have
-// released it to free contiguous heap for the TLS handshake + HTTPUpdate).
-void drawProgress(const char* header, const char* phase, int pct) {
+// released it to free contiguous heap for HTTPUpdate's buffers).
+void drawInstall(const char* phase, int pct) {
     auto& d = M5Cardputer.Display;
     d.fillScreen(BLACK);
     d.setTextSize(2);
     d.setTextColor(WHITE);
     d.setCursor(8, 8);
-    d.print(header);
+    d.print("OTA UPDATE");
     d.setTextSize(1);
     d.setCursor(8, 36);
     d.print(phase);
@@ -124,14 +123,6 @@ void drawProgress(const char* header, const char* phase, int pct) {
     d.setCursor(8, 88);
     d.setTextColor(0x7BEF);
     d.print("do not unplug");
-}
-
-void drawRecovery(const char* phase, int pct) {
-    drawProgress("OTA RECOVERY", phase, pct);
-}
-
-void drawInstall(const char* phase, int pct) {
-    drawProgress("OTA UPDATE", phase, pct);
 }
 
 void rollbackNow() {
@@ -188,11 +179,10 @@ bool fetchManifest(WiFiClientSecure& client,
     return true;
 }
 
-// Shared progress state for both the live and recovery flash paths —
 // HTTPUpdate's onProgress callback has no userdata pointer, so the painter
-// reads these globals.
-const char* g_progressHeader = "OTA UPDATE";
-const char* g_progressPhase  = "downloading…";
+// reads the phase string from this global. Set by installNow() before the
+// flash starts.
+const char* g_progressPhase = "downloading…";
 
 void onFlashProgress(int cur, int total) {
     if (total <= 0) return;
@@ -200,11 +190,11 @@ void onFlashProgress(int cur, int total) {
     int pct = (int)((int64_t)cur * 100 / total);
     if (pct == lastPct) return;
     lastPct = pct;
-    drawProgress(g_progressHeader, g_progressPhase, pct);
+    drawInstall(g_progressPhase, pct);
 }
 
-// Pre-flash NVS bookkeeping. Used by both the live and recovery paths so
-// the boot-attempt rollback works regardless of how we flashed.
+// Pre-flash NVS bookkeeping so the boot-attempt rollback can fire if the
+// new image doesn't boot cleanly.
 void markFlashPending(const std::string& targetSha) {
     Preferences prefs;
     prefs.begin("updater", false);
@@ -212,99 +202,6 @@ void markFlashPending(const std::string& targetSha) {
     prefs.putInt("boots", 0);
     prefs.putString("target", targetSha.c_str());
     prefs.end();
-}
-
-void persistRecoveryFailure(const char* reason) {
-    Preferences prefs;
-    prefs.begin("updater", false);
-    prefs.putString("rec_fail", reason);
-    // Clear any flash-pending bookkeeping — recovery failed before flashing.
-    prefs.putBool("pending", false);
-    prefs.putInt("boots", 0);
-    prefs.end();
-    Serial.printf("[updater] recovery failed: %s\n", reason);
-}
-
-[[noreturn]] void runRecoveryImpl() {
-    // Consume the recovery flag immediately so a crash from here on falls
-    // through to a normal boot rather than looping back into recovery.
-    {
-        Preferences prefs;
-        prefs.begin("updater", false);
-        prefs.putBool("recovery", false);
-        prefs.putString("rec_fail", "");
-        prefs.end();
-    }
-
-    drawRecovery("connecting to wifi…", -1);
-    wifi::begin();
-
-    uint32_t deadline = millis() + 20000;
-    while (!wifi::isConnected() && millis() < deadline) {
-        delay(100);
-    }
-    if (!wifi::isConnected()) {
-        persistRecoveryFailure("wifi timeout");
-        drawRecovery("wifi timeout — rebooting", -1);
-        delay(2000);
-        ESP.restart();
-    }
-
-    Serial.printf("[updater] recovery pre-TLS: free=%u largest=%u\n",
-                  (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
-
-    drawRecovery("checking manifest…", -1);
-    WiFiClientSecure client;
-    client.setInsecure();
-
-    std::string latest, builtAt;
-    if (!fetchManifest(client, latest, builtAt)) {
-        persistRecoveryFailure(g_lastError.empty() ? "manifest fetch failed"
-                                                   : g_lastError.c_str());
-        drawRecovery("manifest failed — rebooting", -1);
-        delay(2000);
-        ESP.restart();
-    }
-
-    // Recovery boot is now OTA-only. Live HTTPS works from normal boot via
-    // mbedTLS DYNAMIC_BUFFER, so health.cpp/report.cpp submit directly and
-    // never need to piggyback on this codepath.
-
-    if (latest == CLAWD_BUILD_SHA) {
-        Serial.println("[updater] recovery: already up to date");
-        // Not a failure — just nothing to do. Persist the result so the UI
-        // reflects the successful check.
-        g_latest         = latest;
-        g_latestBuiltAt  = builtAt;
-        g_status         = updater::Status::UpToDate;
-        g_lastError      = "";
-        persistResult();
-        drawRecovery("already up to date", 100);
-        delay(1500);
-        ESP.restart();
-    }
-
-    Serial.printf("[updater] recovery: flashing %s (have %s)\n",
-                  latest.c_str(), CLAWD_BUILD_SHA);
-    g_progressHeader = "OTA RECOVERY";
-    g_progressPhase  = "downloading…";
-    drawRecovery(g_progressPhase, 0);
-
-    markFlashPending(latest);
-
-    httpUpdate.rebootOnUpdate(true);
-    httpUpdate.onProgress(onFlashProgress);
-    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    auto ret = httpUpdate.update(client, FIRMWARE_URL);
-    // Success reboots inside httpUpdate.update(). Anything below is failure.
-    (void)ret;
-
-    std::string err = httpUpdate.getLastErrorString().c_str();
-    if (err.empty()) err = "flash failed";
-    persistRecoveryFailure(err.c_str());
-    drawRecovery("flash failed — rebooting", -1);
-    delay(2000);
-    ESP.restart();
 }
 
 // Background check task — periodically fetches the manifest so the UI can
@@ -370,17 +267,6 @@ void begin() {
     if (rolledBack) {
         Serial.println("[updater] booted after a rollback — previous flash was unhealthy");
         prefs.putBool("rolled_back", false);
-    }
-
-    // If the previous boot was a failed recovery attempt, surface the reason
-    // through the normal Status::Failed / lastError() channel so the Settings
-    // UI shows it. Also file an issue once WiFi is up (handled in tick()).
-    std::string recFail = prefs.getString("rec_fail", "").c_str();
-    if (!recFail.empty()) {
-        g_status    = Status::Failed;
-        g_lastError = std::string("recovery: ") + recFail;
-        prefs.putString("rec_fail", "");
-        Serial.printf("[updater] previous recovery failed: %s\n", recFail.c_str());
     }
 
     if (pending) {
@@ -511,8 +397,7 @@ void installNow() {
     g_status        = Status::Downloading;
     g_latest        = latest;
     g_latestBuiltAt = builtAt;
-    g_progressHeader = "OTA UPDATE";
-    g_progressPhase  = "downloading…";
+    g_progressPhase = "downloading…";
     drawInstall(g_progressPhase, 0);
 
     markFlashPending(latest);
@@ -554,26 +439,5 @@ std::string latestBuiltAt()    { return g_latestBuiltAt; }
 uint32_t    lastCheckMs()      { return g_lastCheckMs; }
 uint32_t    lastCheckEpoch()   { return g_lastCheckEpoch; }
 std::string lastError()        { return g_lastError; }
-
-void scheduleRecoveryUpdate() {
-    Preferences prefs;
-    prefs.begin("updater", false);
-    prefs.putBool("recovery", true);
-    prefs.putString("rec_fail", "");
-    prefs.end();
-    Serial.println("[updater] scheduled recovery-boot update");
-    delay(100);
-    ESP.restart();
-}
-
-bool isRecoveryBoot() {
-    Preferences prefs;
-    prefs.begin("updater", true);   // read-only
-    bool v = prefs.getBool("recovery", false);
-    prefs.end();
-    return v;
-}
-
-[[noreturn]] void runRecovery() { runRecoveryImpl(); }
 
 }  // namespace updater

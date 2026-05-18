@@ -191,13 +191,13 @@ on success (single reboot via `rebootOnUpdate(true)`). On failure the
 UI is restored and the caller returns — no forced reboot. Status and
 last error are persisted to NVS for the Settings UI.
 
-**Recovery boot still exists as a fallback** (`scheduleRecoveryUpdate()`
-+ `runRecoveryImpl()`) but is no longer the primary path. The two-
-reboot dance was a workaround for the old prebuilt-mbedTLS heap
-constraint, which Phase 1 eliminated. Recovery is kept until the live
-path has proven stable across a release cycle, then it'll be deleted.
-Currently `report.cpp` uses it as a last-resort fallback if a live
-issue submit fails.
+A previous incarnation of OTA used a two-reboot "recovery" dance to
+get an unfragmented heap for the github.com TLS handshake. The
+IDF-component build with `MBEDTLS_DYNAMIC_BUFFER` removed the need;
+the recovery scaffolding (`runRecovery()`, `isRecoveryBoot()`, the
+early branch in `main.cpp::setup()`, the NVS `recovery` flag) was
+deleted in Phase 6. If live OTA fails on hardware, USB reflash is the
+fallback.
 
 **Rollback** is app-level (ESP-IDF's built-in rollback is not enabled
 because it requires a framework rebuild):

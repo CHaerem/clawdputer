@@ -28,8 +28,10 @@ void begin();
 // while.
 void tick();
 
-// Reboot into recovery mode and run an atomic check-and-flash there.
-// Calls scheduleRecoveryUpdate() — never returns to the caller.
+// Run a live OTA from the current normal boot: pauses BLE + releases
+// canvas + pauses SD, fetches the manifest, streams firmware.bin via
+// HTTPUpdate, and reboots into the new image on success. Returns to the
+// caller only on failure (UI is restored before returning).
 void installNow();
 
 Status      status();
@@ -49,21 +51,5 @@ uint32_t    lastCheckEpoch();
 uint32_t    lastCheckMs();
 
 std::string lastError();        // "" if last check succeeded
-
-// Request an OTA on the next boot. Writes a flag to NVS and reboots.
-// The next boot detects the flag very early in setup() and branches into
-// runRecovery() — a minimal env (no canvas sprite, no BLE, no apps) where
-// the heap is unfragmented enough for the mbedTLS handshake to github.com.
-void scheduleRecoveryUpdate();
-
-// Called from main.cpp setup() before any heap-fragmenting init. Returns
-// true if scheduleRecoveryUpdate() was called on the previous boot.
-bool isRecoveryBoot();
-
-// Runs the recovery flow: WiFi connect → fetch manifest → flash if newer.
-// Never returns — always reboots (into the new image on success, into
-// normal mode on failure). Caller must have already done M5Cardputer.begin()
-// so the status screen can be drawn.
-[[noreturn]] void runRecovery();
 
 }  // namespace updater
