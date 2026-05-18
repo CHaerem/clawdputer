@@ -14,6 +14,7 @@
 #include "core/registry.h"
 #include "services/ble.h"
 #include "services/crashlog.h"
+#include "services/github.h"
 #include "services/sd.h"
 #include "services/telemetry.h"
 #include "services/updater.h"
@@ -40,6 +41,9 @@ int         g_typeSel  = 0;        // 0=bug, 1=feature
 std::string g_title;
 bool        g_dirty    = true;
 bool        g_prefilled = false;
+std::string g_resultMsg;
+bool        g_resultOk  = false;
+int         g_resultIssue = 0;
 
 const char* kindLabel() {
     return g_kind == Kind::Bug ? "bug" : "enhancement";
@@ -175,11 +179,11 @@ void renderConfirm() {
     y += 14;
     d.setCursor(6, y);
     d.setTextColor(0x07E0);
-    d.print("enter: submit & reboot");
+    d.print("enter: submit to github");
     y += 10;
     d.setCursor(6, y);
     d.setTextColor(0x8C71);
-    d.print("(also checks for update)");
+    d.print("(falls back to queue if offline)");
 
     drawFooter("enter submit   bksp back   tab home");
     ui::flush();
@@ -189,14 +193,36 @@ void renderSubmitting() {
     auto& d = ui::display();
     ui::beginFrame();
     ui::statusbar::draw();
-    renderHeader("rebooting…");
-    d.setCursor(6, 60);
-    d.setTextColor(0xFFE0);
-    d.print("queued, restarting");
-    d.setCursor(6, 72);
-    d.setTextColor(0x8C71);
-    d.print("recovery boot will post");
-    drawFooter("");
+    if (g_resultMsg.empty()) {
+        renderHeader("submitting…");
+        d.setCursor(6, 60);
+        d.setTextColor(0xFFE0);
+        d.print("posting to github");
+        d.setCursor(6, 72);
+        d.setTextColor(0x8C71);
+        d.print("hold tight");
+        drawFooter("");
+    } else if (g_resultOk) {
+        renderHeader("submitted");
+        d.setCursor(6, 60);
+        d.setTextColor(0x07E0);
+        char buf[48];
+        snprintf(buf, sizeof(buf), "issue #%d filed", g_resultIssue);
+        d.print(buf);
+        d.setCursor(6, 76);
+        d.setTextColor(0x8C71);
+        d.print("tab: back home");
+        drawFooter("tab home");
+    } else {
+        renderHeader("queued for recovery");
+        d.setCursor(6, 60);
+        d.setTextColor(0xFFE0);
+        d.print(g_resultMsg.c_str());
+        d.setCursor(6, 76);
+        d.setTextColor(0x8C71);
+        d.print("rebooting to retry");
+        drawFooter("");
+    }
     ui::flush();
 }
 
@@ -211,10 +237,27 @@ void render() {
 
 void doSubmit() {
     g_stage = Stage::Submitting;
-    render();   // paint the "rebooting…" screen synchronously
+    g_resultMsg.clear();
+    g_resultOk = false;
+    render();   // paint the "submitting…" screen synchronously
     std::string body = buildBody();
+
+    auto r = github::submitIssue(g_title, body, kindLabel());
+    if (r.ok) {
+        g_resultOk    = true;
+        g_resultIssue = r.issueNumber;
+        g_resultMsg   = "ok";
+        g_dirty       = true;
+        return;
+    }
+
+    // Live submit failed (offline, low heap, http error). Fall back to NVS
+    // queue + recovery boot so the issue still gets filed eventually.
     telemetry::enqueue(g_title, body, kindLabel());
-    delay(600);
+    g_resultOk  = false;
+    g_resultMsg = r.error.empty() ? "submit failed" : r.error;
+    render();
+    delay(1200);
     updater::scheduleRecoveryUpdate();   // never returns
 }
 

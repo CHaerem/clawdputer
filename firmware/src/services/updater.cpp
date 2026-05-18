@@ -26,7 +26,6 @@
 
 #include "wifi.h"
 #include "telemetry.h"
-#include "identity.h"
 
 #ifndef CLAWD_BUILD_SHA
 #define CLAWD_BUILD_SHA "unknown"
@@ -211,7 +210,6 @@ void persistRecoveryFailure(const char* reason) {
     }
 
     drawRecovery("connecting to wifi…", -1);
-    identity::loadOrGenerateSealKey();
     wifi::begin();
 
     uint32_t deadline = millis() + 20000;
@@ -241,14 +239,9 @@ void persistRecoveryFailure(const char* reason) {
         ESP.restart();
     }
 
-    // Recovery boot is the one moment we have an unfragmented heap on this
-    // hardware, so it's also the only place github.com POSTs reliably go
-    // through. Drain any pending telemetry the running firmware couldn't
-    // file (typically a low-heap submit failure caught by health.cpp).
-    if (telemetry::pending()) {
-        drawRecovery("draining telemetry…", -1);
-        telemetry::drain();
-    }
+    // Recovery boot is now OTA-only. Live HTTPS works from normal boot via
+    // mbedTLS DYNAMIC_BUFFER, so health.cpp/report.cpp submit directly and
+    // never need to piggyback on this codepath.
 
     if (latest == CLAWD_BUILD_SHA) {
         Serial.println("[updater] recovery: already up to date");

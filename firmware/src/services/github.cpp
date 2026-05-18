@@ -14,8 +14,6 @@
 
 namespace {
 
-constexpr size_t MIN_TLS_BLOCK = 28 * 1024;
-
 std::string jsonEscape(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 8);
@@ -83,16 +81,6 @@ SubmitResult submitIssue(const std::string& title,
 
     bool hadCanvas = ui::canvasActive();
     if (hadCanvas) ui::releaseCanvas();
-
-    size_t maxBlock = ESP.getMaxAllocHeap();
-    if (maxBlock < MIN_TLS_BLOCK) {
-        if (hadCanvas) ui::tryAcquireCanvas();
-        char buf[64];
-        snprintf(buf, sizeof(buf), "low heap (%u < %u)",
-                 (unsigned)maxBlock, (unsigned)MIN_TLS_BLOCK);
-        r.error = buf;
-        return r;
-    }
 
     std::string payload = "{\"title\":\"" + jsonEscape(title)
                         + "\",\"body\":\""  + jsonEscape(body)
