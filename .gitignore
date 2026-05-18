@@ -28,3 +28,8 @@ firmware/src/secrets/sealed_blobs.h
 .build/
 .swiftpm/
 Package.resolved
+
+# Host-side ROM sync output (binaries — never commit, see web/roms-manifest.txt)
+/roms-out/
+# Private ROM manifest (commercial ROMs you legally own from your own storage)
+web/roms-manifest.private.txt

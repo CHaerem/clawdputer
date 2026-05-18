@@ -246,6 +246,31 @@ MAC (weaker — anyone with the MAC can decrypt) or surrendering the
 per-device guarantee. Single-developer setup, so the manual re-seal
 on NVS wipe is acceptable.
 
+## ROMs (retro app)
+
+`apps/retro` runs vendored emulator cores (`firmware/lib/<core>/`) on
+ROMs loaded from `/roms/` on the SD card. Currently only GnuBoy
+(GB/GBC). Picker shows everything from `/roms/` matching a known
+extension and dispatches by ext to the right core.
+
+The device does **not** download ROMs. ROMs are managed declaratively
+in the repo:
+
+- `web/roms-manifest.txt` — public wishlist (name → URL). The repo
+  stores only references, never binaries. Public-domain entries only
+  (Blargg test ROMs ship by default).
+- `web/roms-manifest.private.txt` — gitignored. Same format; for
+  commercial ROMs you legally own, hosted on your own private storage.
+- `tools/sync-roms.sh [target]` — host-side script that reads both
+  manifests and downloads each entry into `target` (default
+  `./roms-out/`, gitignored). For an SD card on macOS:
+  `tools/sync-roms.sh /Volumes/<SD_LABEL>/roms`.
+- The display name on the left of `|` becomes the filename, so use
+  filesystem-safe names with the extension (`my_game.gb | URL`).
+
+Don't commit ROM binaries to this repo. Don't add commercial ROM URLs
+to the public manifest. DMCA is real.
+
 ## Notes on the chat path
 
 The bridge spawns `claude` per turn with:
