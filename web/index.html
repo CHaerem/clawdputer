@@ -54,8 +54,16 @@
           <li><strong>Buddy</strong> &mdash; the Claude Desktop companion screen. After a moment it goes "connected" and a permission prompt arrives so you can press <kbd>Y</kbd> / <kbd>N</kbd>.</li>
           <li><strong>Chat</strong> &mdash; the device-side UI for a <code>claude</code> CLI session spawned by the Mac-side bridge. Streamed responses are simulated.</li>
           <li><strong>SSH</strong> &mdash; sealed host-preset picker.</li>
-          <li><strong>Game Boy</strong> &mdash; ROM browser (no emulator running in the demo).</li>
+          <li><strong>Retro</strong> &mdash; multi-console emulator app. Currently <strong>GnuBoy</strong> (GB / GBC) shipped; framework ready for NES, SMS/GG, NGP, etc. The ROM list is loaded live from <a href="roms-manifest.txt">roms-manifest.txt</a> in this repo; on the device, <code>[+ Download games]</code> fetches it over HTTPS.</li>
           <li><strong>Settings</strong> &mdash; the same sections the real device shows.</li>
+        </ul>
+      </section>
+
+      <section class="card">
+        <h2>ROM manifest</h2>
+        <p class="muted">Declared in <a href="roms-manifest.txt">web/roms-manifest.txt</a> &mdash; the repo holds URLs only, never binaries.</p>
+        <ul id="manifest-list" class="apps-list muted">
+          <li>loading…</li>
         </ul>
       </section>
 
@@ -80,5 +88,31 @@
   </footer>
 
   <script src="app.js" type="module"></script>
+  <script>
+    // Populate the "ROM manifest" sidebar card from roms-manifest.txt.
+    (async () => {
+      const target = document.getElementById('manifest-list');
+      if (!target) return;
+      try {
+        const res = await fetch('roms-manifest.txt', { cache: 'no-cache' });
+        if (!res.ok) throw new Error('http ' + res.status);
+        const text = await res.text();
+        const items = [];
+        for (const raw of text.split(/\r?\n/)) {
+          const line = raw.trim();
+          if (!line || line.startsWith('#')) continue;
+          const name = line.includes('|') ? line.split('|')[0].trim()
+                     : line.split('/').pop().split('?')[0];
+          if (!/\.(gb|gbc|nes|sms|gg|ngp|ngc)$/i.test(name)) continue;
+          items.push(name);
+        }
+        target.innerHTML = items.length
+          ? items.map(n => `<li><code>${n}</code></li>`).join('')
+          : '<li>(manifest empty)</li>';
+      } catch (err) {
+        target.innerHTML = '<li>(manifest fetch failed: ' + err.message + ')</li>';
+      }
+    })();
+  </script>
 </body>
 </html>
