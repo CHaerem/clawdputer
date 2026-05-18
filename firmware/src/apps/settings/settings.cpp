@@ -1,7 +1,9 @@
 // Settings app — organised into sections. Up/Down to move, Enter to invoke.
 
 #include <Arduino.h>
+#include <HTTPClient.h>
 #include <M5Cardputer.h>
+#include <WiFiClientSecure.h>
 #include <time.h>
 
 #include <functional>
@@ -87,6 +89,59 @@ void actInstallUpdate() {
     toast("rebooting to install…");
     delay(600);
     updater::installNow();   // never returns
+}
+
+// Experiment: can we do a github.com TLS handshake from a fully-booted
+// firmware by shrinking the mbedTLS fragment buffers at runtime, instead
+// of needing the recovery-boot dance? Results logged over serial.
+void actProbeTls() {
+    Serial.println("[probe] === TLS probe start ===");
+    bool hadCanvas = ui::canvasActive();
+    bool blePaused = ble::isPaused();
+    Serial.printf("[probe] pre: free=%u largest=%u canvas=%d blePaused=%d\n",
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap(),
+                  (int)hadCanvas, (int)blePaused);
+
+    if (hadCanvas) ui::releaseCanvas();
+    if (!blePaused) ble::pause();
+    delay(100);
+    Serial.printf("[probe] freed: free=%u largest=%u\n",
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    client.setHandshakeTimeout(15);
+
+    HTTPClient http;
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    http.setTimeout(15000);
+    const char* url =
+      "https://github.com/CHaerem/clawdputer/releases/latest/download/version.txt";
+    bool ok = http.begin(client, url);
+    Serial.printf("[probe] begin=%d\n", (int)ok);
+    int code = ok ? http.GET() : -1;
+    Serial.printf("[probe] GET=%d free=%u largest=%u\n",
+                  code,
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+    if (code > 0) {
+        String body = http.getString();
+        Serial.printf("[probe] body(%d): %s\n", (int)body.length(), body.c_str());
+    }
+    http.end();
+
+    if (!blePaused) ble::resume();
+    if (hadCanvas) ui::tryAcquireCanvas();
+    Serial.printf("[probe] restored: free=%u largest=%u\n",
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap());
+    Serial.println("[probe] === TLS probe end ===");
+
+    char t[48];
+    snprintf(t, sizeof(t), code == 200 ? "TLS ok: %d" : "TLS fail: %d", code);
+    toast(t);
 }
 
 void actClearWifi() {
@@ -274,6 +329,7 @@ void rebuild() {
         }
 
         g_items.push_back(act("check & install →", actInstallUpdate));
+        g_items.push_back(act("probe TLS (serial) →", actProbeTls));
     }
 
     // ── IDENTITY ──
