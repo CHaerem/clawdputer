@@ -242,7 +242,6 @@ function tileBg(a) {
     buddy:    0x328A,
     chat:     0x2986,
     ssh:      0x223A,
-    retro:    0x2A60,
     settings: 0x4208,
   })[a.id] ?? 0x18E3;
 }
@@ -251,7 +250,6 @@ function tileAccent(a) {
     buddy:    0x07FF,
     chat:     0x5D9F,
     ssh:      0x9CFC,
-    retro:    0xAFE5,
     settings: 0xC618,
   })[a.id] ?? 0xFFFF;
 }
@@ -774,125 +772,6 @@ const ssh = {
 };
 registerApp(ssh);
 
-// ── RETRO ───────────────────────────────────────────────────────────────────
-
-const retro = {
-  id: 'retro', name: 'Retro', description: 'Game console emulators',
-  // Loaded asynchronously from roms-manifest.txt; falls back to a small
-  // placeholder list while pending or on failure.
-  roms: [
-    { label: 'blargg_cpu_instrs.gb', ext: 'GB' },
-  ],
-  manifestLoaded: false,
-  sel: 0,
-  launching: null,
-
-  async loadManifest() {
-    try {
-      const res = await fetch('roms-manifest.txt', { cache: 'no-cache' });
-      if (!res.ok) throw new Error(`http ${res.status}`);
-      const text = await res.text();
-      const parsed = [];
-      for (const raw of text.split(/\r?\n/)) {
-        const line = raw.trim();
-        if (!line || line.startsWith('#')) continue;
-        let name;
-        if (line.includes('|')) {
-          name = line.split('|')[0].trim();
-        } else {
-          name = line.split('/').pop().split('?')[0];
-        }
-        if (!name) continue;
-        const m = name.match(/\.(gb|gbc|nes|sms|gg|ngp|ngc)$/i);
-        if (!m) continue;
-        parsed.push({ label: name, ext: m[1].toUpperCase() });
-      }
-      if (parsed.length) this.roms = parsed;
-      this.manifestLoaded = true;
-      markDirty();
-    } catch (err) {
-      console.warn('manifest load failed:', err);
-      this.manifestLoaded = true;   // give up; show the fallback
-      markDirty();
-    }
-  },
-
-  onEnter() {
-    this.sel = 0;
-    this.launching = null;
-    if (!this.manifestLoaded) this.loadManifest();
-    markDirty();
-  },
-  onExit() {},
-  onTick() {},
-  onKey(ch) {
-    if (this.launching) return;
-    // +1 because index 0 is the "[+ Download games]" sentinel row.
-    const n = this.roms.length + 1;
-    if (ch === KEY.UP) { this.sel = (this.sel - 1 + n) % n; markDirty(); }
-    else if (ch === KEY.DOWN) { this.sel = (this.sel + 1) % n; markDirty(); }
-    else if (ch === '\n') {
-      if (this.sel === 0) {
-        this.launching = '__downloader__';
-      } else {
-        this.launching = this.roms[this.sel - 1].label;
-      }
-      markDirty();
-    }
-  },
-  onDraw(d) {
-    d.fillScreen(0x0000);
-    drawStatusbar(d);
-
-    if (this.launching === '__downloader__') {
-      d.fillRect(0, STATUSBAR_H, SCREEN_W, SCREEN_H - STATUSBAR_H, rgb565(0x1082));
-      d.setTextSize(1); d.setTextColor(COLOR.WHITE);
-      d.setCursor(8, 30); d.print('fetching manifest…');
-      d.setCursor(8, 50); d.setTextColor(COLOR.DIM);
-      d.print('(simulated — on the real device this');
-      d.setCursor(8, 62); d.print(' pulls roms-manifest.txt over HTTPS)');
-      return;
-    }
-    if (this.launching) {
-      // emulator-running tribute
-      d.fillRect(0, STATUSBAR_H, SCREEN_W, SCREEN_H - STATUSBAR_H, rgb565(0x8E26));
-      d.setTextSize(2); d.setTextColor(rgb565(0x0320));
-      d.setCursor(72, 40); d.print('RETRO');
-      d.setTextSize(1); d.setTextColor(rgb565(0x2104));
-      d.setCursor(40, 70); d.print(this.launching);
-      d.setCursor(40, 100); d.setTextColor(rgb565(0x0320));
-      d.print('(emulator not in web demo)');
-      return;
-    }
-
-    let y = STATUSBAR_H + 4;
-    d.setTextSize(1);
-    d.setTextColor(COLOR.DIM);
-    d.setCursor(4, y);
-    d.print(this.manifestLoaded
-      ? `manifest: ${this.roms.length} ROMs`
-      : 'loading manifest…');
-    y += 12;
-
-    const rows = [{ label: '[+ Download games]', ext: '' },
-                  ...this.roms.map(r => ({ label: `[${r.ext}] ${r.label}`, ext: r.ext }))];
-    const maxRows = 7;
-    const scrollTop = Math.max(0, Math.min(this.sel - 3, rows.length - maxRows));
-    for (let i = scrollTop; i < Math.min(rows.length, scrollTop + maxRows); i++) {
-      const sel = i === this.sel;
-      if (sel) d.fillRect(0, y - 1, SCREEN_W, 11, rgb565(0x2104));
-      d.setTextColor(sel ? COLOR.WHITE : COLOR.GREY);
-      d.setCursor(8, y + 1); d.print(rows[i].label);
-      y += 11;
-    }
-
-    d.fillRect(0, 124, SCREEN_W, 11, COLOR.STATUSBG);
-    d.drawFastHLine(0, 124, SCREEN_W, COLOR.DIVIDER);
-    d.setTextColor(COLOR.DIM); d.setCursor(4, 127);
-    d.print(';. select  enter open  tab:home');
-  },
-};
-registerApp(retro);
 
 // ── SETTINGS ────────────────────────────────────────────────────────────────
 
