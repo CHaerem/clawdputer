@@ -320,6 +320,42 @@ edit `web/app.js`, define the app the same way the existing
 The manifest overlay will then enrich it with the live firmware
 metadata.
 
+## Wokwi simulator (in progress)
+
+`firmware/wokwi.toml` + `firmware/diagram.json` exist but the simulator
+**does not boot the firmware end-to-end yet**. The parked
+`.github/workflows/wokwi.yml` says why: the generic ESP32-S3 devkit in
+`diagram.json` doesn't expose the Cardputer's display SPI pins, matrix
+keyboard, or IP5306 battery monitor, so `M5Cardputer.begin()` hangs
+before any serial output.
+
+The web demo's "Open in Wokwi" badge points at
+`https://wokwi.com/github/CHaerem/clawdputer` so the link is in place
+for when the diagram is finished. Three things have to land for the
+badge to load a working simulation:
+
+1. **Cardputer-accurate `diagram.json`.** Wire ESP32-S3 ↔ ST7789v3
+   (240×135, SPI on the M5Cardputer pins), add a 4×14 matrix keyboard
+   (probably as a Wokwi custom chip — there's no stock 56-key part),
+   and stub the IP5306 on I2C. Exact GPIO numbers come from the
+   M5Cardputer Arduino library / Cardputer schematic.
+2. **`firmware.bin` reachable from the GitHub repo.** Wokwi clones the
+   repo at the requested branch and resolves `firmware` in `wokwi.toml`
+   relative to the toml. Since `.pio/` is gitignored, options are:
+   (a) CI commits the built binary to a tracked path like
+   `firmware/wokwi-firmware.bin`, (b) a separate orphan branch
+   `wokwi-build` is force-pushed with the latest binary, or
+   (c) pay for Wokwi-CI's API and upload to a hosted project.
+   Option (a) is simplest, option (b) keeps history clean.
+3. **(Optional) Per-PR firmware.** If reviewers need the simulator to
+   reflect a PR's firmware changes, extend the publish-firmware step
+   to write per-branch binaries (`wokwi-build/pr-<N>/firmware.bin`)
+   and update the Wokwi badge URL in the PR preview comment. Until
+   this is wired up, the badge on PR previews opens main's firmware.
+
+The badge has a `scaffold` tag in the UI to make the in-progress state
+obvious — drop the tag once steps 1 and 2 are done.
+
 ## Keeping docs in sync
 
 When pushing changes that affect user-facing behavior, app list, or
