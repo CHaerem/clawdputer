@@ -320,41 +320,70 @@ edit `web/app.js`, define the app the same way the existing
 The manifest overlay will then enrich it with the live firmware
 metadata.
 
-## Wokwi simulator (in progress)
+## Wokwi simulator
 
-`firmware/wokwi.toml` + `firmware/diagram.json` exist but the simulator
-**does not boot the firmware end-to-end yet**. The parked
-`.github/workflows/wokwi.yml` says why: the generic ESP32-S3 devkit in
-`diagram.json` doesn't expose the Cardputer's display SPI pins, matrix
-keyboard, or IP5306 battery monitor, so `M5Cardputer.begin()` hangs
-before any serial output.
+The hosted demo's "Open in Wokwi" badge points at
+`https://wokwi.com/github/CHaerem/clawdputer/tree/wokwi-firmware`. The
+orphan `wokwi-firmware` branch is force-pushed by
+`.github/workflows/wokwi-publish.yml` on every main firmware build and
+contains: `firmware/firmware.bin`, `firmware/firmware.elf`,
+`firmware/wokwi.toml` (pointing at the committed binary, not the
+gitignored `.pio` path), `firmware/diagram.json`, and the
+`cardputer-keyboard` custom chip. Wokwi clones the branch, finds
+everything relative to `wokwi.toml`, and boots the actual firmware.
 
-The web demo's "Open in Wokwi" badge points at
-`https://wokwi.com/github/CHaerem/clawdputer` so the link is in place
-for when the diagram is finished. Three things have to land for the
-badge to load a working simulation:
+**Verified pinout** (from M5GFX + M5Cardputer/IOMatrix.cpp):
 
-1. **Cardputer-accurate `diagram.json`.** Wire ESP32-S3 ↔ ST7789v3
-   (240×135, SPI on the M5Cardputer pins), add a 4×14 matrix keyboard
-   (probably as a Wokwi custom chip — there's no stock 56-key part),
-   and stub the IP5306 on I2C. Exact GPIO numbers come from the
-   M5Cardputer Arduino library / Cardputer schematic.
-2. **`firmware.bin` reachable from the GitHub repo.** Wokwi clones the
-   repo at the requested branch and resolves `firmware` in `wokwi.toml`
-   relative to the toml. Since `.pio/` is gitignored, options are:
-   (a) CI commits the built binary to a tracked path like
-   `firmware/wokwi-firmware.bin`, (b) a separate orphan branch
-   `wokwi-build` is force-pushed with the latest binary, or
-   (c) pay for Wokwi-CI's API and upload to a hosted project.
-   Option (a) is simplest, option (b) keeps history clean.
-3. **(Optional) Per-PR firmware.** If reviewers need the simulator to
-   reflect a PR's firmware changes, extend the publish-firmware step
-   to write per-branch binaries (`wokwi-build/pr-<N>/firmware.bin`)
-   and update the Wokwi badge URL in the PR preview comment. Until
-   this is wired up, the badge on PR previews opens main's firmware.
+| Function          | GPIO(s) |
+|-------------------|---------|
+| ST7789 MOSI       | 35 |
+| ST7789 SCK        | 36 |
+| ST7789 DC         | 34 |
+| ST7789 CS         | 37 |
+| ST7789 RST        | 33 |
+| ST7789 BL (PWM)   | 38 |
+| Keyboard COL out  | 8, 9, 11 (→ 74HC138 demux) |
+| Keyboard ROW in   | 13, 15, 3, 4, 5, 6, 7 (active-low, pull-up) |
+| G0 button         | 0 |
+| RGB LED (WS2812)  | 21 |
+| External I2C SDA/SCL | 1 / 2 |
+| microSD CS/SCLK/MISO/MOSI | 40 / 14 / 39 / 12 |
 
-The badge has a `scaffold` tag in the UI to make the in-progress state
-obvious — drop the tag once steps 1 and 2 are done.
+`diagram.json` wires the StampS3 to a 240×135 ST7789, a G0 push button,
+and the custom `chip-cardputer-keyboard` (sources under
+`firmware/wokwi-chips/cardputer-keyboard/`). The custom chip mirrors
+`IOMatrixKeyboardReader::update()` — three column-select inputs driven
+by GPIO 8/9/11, seven open-drain row outputs that the chip pulls low
+for any pressed cell matching the current column step. Pressed keys
+are configured via the chip's `keys` text-input attribute as
+`x,y;x,y;…` cells (coordinates match `_key_value_map[y][x]`).
+
+**Variant detection.** M5Unified probes GPIO 5/6/8/9 to pick between
+`board_M5Cardputer` and `board_M5CardputerADV`. With only the keyboard
+chip attached and no I2C pull-ups on 8/9, the firmware detects this as
+non-ADV Cardputer and initialises accordingly. The codebase compiles
+against the StampS3 generic and works on either physical variant.
+
+**Untested**. None of this has been verified against a live Wokwi
+simulation from this sandbox — Wokwi.com isn't reachable from CI/dev
+shells, and the custom chip C code can only be compiled by Wokwi's own
+toolchain at simulation start. Expect to iterate after the first real
+boot:
+- If `M5Cardputer.begin()` still hangs, the most likely culprits are
+  (a) ST7789 panel id mismatch in M5GFX's autodetect path, (b) a
+  missing pull-up on the keyboard inputs that the firmware relies on
+  but the custom chip doesn't replicate, or (c) the StampS3 board part
+  not exposing GPIO 11 / 33–38 in the Wokwi diagram.
+- The `wokwi.toml` `[[chip]]` syntax is best-effort — if Wokwi expects
+  a different schema, the chip won't load and the keyboard will appear
+  dead. Falling back to `wokwi-cli`'s `--custom-chip` flag locally is
+  the fastest way to diagnose.
+
+**Per-PR firmware previews.** Not wired up yet. Today the badge always
+points at main's firmware via the `wokwi-firmware` branch. If
+firmware-changing PRs become common, extend `wokwi-publish.yml` to
+also force-push to `wokwi-firmware/pr-<N>` branches on PR events and
+override the badge URL in `pr-preview.yml`'s sticky comment.
 
 ## Keeping docs in sync
 

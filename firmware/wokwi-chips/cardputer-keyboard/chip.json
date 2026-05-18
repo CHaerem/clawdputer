@@ -1,0 +1,28 @@
+{
+  "name": "Cardputer Keyboard",
+  "version": 1,
+  "author": "clawdputer",
+  "description": "M5Cardputer matrix keyboard scanner. Mirrors M5Cardputer's IOMatrixKeyboardReader: 3 active-high outputs (COL_A/B/C) drive a 74HC138-style column selector, 7 pulled-up inputs (ROW0..ROW6) read row state. Pressed keys are configured via the `keys` attribute as a comma-separated list of (x,y) cells.",
+  "pins": [
+    "VCC",
+    "GND",
+    "COL_A",
+    "COL_B",
+    "COL_C",
+    "ROW0",
+    "ROW1",
+    "ROW2",
+    "ROW3",
+    "ROW4",
+    "ROW5",
+    "ROW6"
+  ],
+  "controls": [
+    {
+      "id": "keys",
+      "type": "text-input",
+      "label": "Pressed keys (x,y;x,y;...)",
+      "default": ""
+    }
+  ]
+}

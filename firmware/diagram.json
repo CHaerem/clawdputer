@@ -1,13 +1,45 @@
 {
   "version": 1,
-  "author": "clawdputer CI",
+  "author": "clawdputer",
   "editor": "wokwi",
+  "_": "Wokwi simulation of the M5Stack Cardputer (non-ADV). Pinout matches M5GFX/M5Unified source: display pins from M5GFX::_panel_last (ST7789 init), keyboard matrix from M5Cardputer's IOMatrixKeyboardReader (output={8,9,11}, input={13,15,3,4,5,6,7}). M5Unified autodetects which Cardputer variant is connected by probing GPIO 5/6/8/9 — with only the keyboard chip attached (no I2C pullups on 8/9) the firmware will detect this as board_M5Cardputer.",
   "parts": [
-    { "type": "board-esp32-s3-devkit-c-1", "id": "esp", "top": 0, "left": 0 }
+    { "type": "board-esp32-s3-devkit-c-1", "id": "esp", "top": 0, "left": 0, "attrs": { "flashSize": "8", "psramSize": "8" } },
+
+    { "type": "board-st7789-240x135", "id": "lcd", "top": -150, "left": 200, "rotate": 0, "attrs": {} },
+
+    { "type": "chip-cardputer-keyboard", "id": "kb", "top": 200, "left": 100, "attrs": {} },
+
+    { "type": "wokwi-pushbutton", "id": "btn-g0", "top": 100, "left": -120, "attrs": { "color": "white", "label": "G0" } }
   ],
   "connections": [
-    [ "esp:TX", "$serialMonitor:RX", "", [] ],
-    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+    [ "esp:TX",  "$serialMonitor:RX", "",       [] ],
+    [ "esp:RX",  "$serialMonitor:TX", "",       [] ],
+
+    [ "esp:GND.1", "lcd:GND",  "black", [] ],
+    [ "esp:3V3",   "lcd:VCC",  "red",   [] ],
+    [ "esp:35",    "lcd:SDA",  "green", [] ],
+    [ "esp:36",    "lcd:SCL",  "green", [] ],
+    [ "esp:34",    "lcd:DC",   "orange",[] ],
+    [ "esp:37",    "lcd:CS",   "orange",[] ],
+    [ "esp:33",    "lcd:RES",  "orange",[] ],
+    [ "esp:38",    "lcd:BL",   "yellow",[] ],
+
+    [ "esp:GND.2", "kb:GND",   "black", [] ],
+    [ "esp:3V3",   "kb:VCC",   "red",   [] ],
+    [ "esp:8",     "kb:COL_A", "blue",  [] ],
+    [ "esp:9",     "kb:COL_B", "blue",  [] ],
+    [ "esp:11",    "kb:COL_C", "blue",  [] ],
+    [ "esp:13",    "kb:ROW0",  "purple",[] ],
+    [ "esp:15",    "kb:ROW1",  "purple",[] ],
+    [ "esp:3",     "kb:ROW2",  "purple",[] ],
+    [ "esp:4",     "kb:ROW3",  "purple",[] ],
+    [ "esp:5",     "kb:ROW4",  "purple",[] ],
+    [ "esp:6",     "kb:ROW5",  "purple",[] ],
+    [ "esp:7",     "kb:ROW6",  "purple",[] ],
+
+    [ "btn-g0:1.l", "esp:0",   "green", [] ],
+    [ "btn-g0:2.l", "esp:GND.3","black",[] ]
   ],
   "dependencies": {}
 }

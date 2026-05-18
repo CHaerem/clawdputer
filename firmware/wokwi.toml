@@ -1,11 +1,28 @@
-# Wokwi simulator config — used by CI to run the firmware against an
-# emulated ESP32-S3 so we catch boot-time panics, stack overflows and
-# missing-symbol failures before publishing a release.
+# Wokwi simulator config.
 #
-# Local use: install the wokwi-cli, then:
-#   cd firmware && pio run -e cardputer && wokwi-cli . --scenario test.scenario.yaml
+# Two consumers:
+#
+# 1. CI (wokwi-cli) — reads `firmware`/`elf` from the local .pio build
+#    output. Used by .github/workflows/wokwi.yml for boot smoke tests.
+#
+# 2. The hosted browser embed at https://wokwi.com/github/CHaerem/clawdputer
+#    (and the "Open in Wokwi" badge on the web demo). Wokwi clones this
+#    repo at the requested branch and loads `firmware` relative to this
+#    toml. Because `.pio/` is gitignored, the embed only resolves on the
+#    `wokwi-firmware` orphan branch, which is force-pushed by
+#    .github/workflows/wokwi-publish.yml with a freshly built
+#    firmware.bin at firmware/firmware.bin alongside this file.
+#
+# diagram.json and the cardputer-keyboard custom chip wire up the real
+# Cardputer pinout (display SPI on GPIO 33–38, matrix keyboard scan on
+# GPIO 8/9/11 outputs and 3/4/5/6/7/13/15 inputs). At runtime M5Unified
+# autodetects the simulated hardware as board_M5Cardputer (non-ADV).
 
 [wokwi]
 version = 1
 firmware = '.pio/build/cardputer/firmware.bin'
 elf      = '.pio/build/cardputer/firmware.elf'
+
+[[chip]]
+name   = "cardputer-keyboard"
+binary = "wokwi-chips/cardputer-keyboard/chip.c"
