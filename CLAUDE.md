@@ -155,9 +155,12 @@ Every push to `main` that touches `firmware/**` runs
 `firmware.bin` + `version.txt` to the `latest` GitHub release.
 
 On device, `services/updater.cpp`:
-- fetches `version.txt` + `firmware.bin` and flashes from inside a
-  recovery boot (see below). The check is user-triggered from Settings
-  — there is no background poll.
+- fetches `version.txt` + `firmware.bin` live from normal boot (see
+  "Live OTA" below). User-triggered from Settings → "check & install →".
+- runs a background FreeRTOS task (`updater_bg`) that polls `version.txt`
+  60 s after boot, then every 6 h. When a newer SHA is published, status
+  flips to `UpdateAvailable` and the statusbar shows a yellow ↑ — no
+  flash happens until the user taps "check & install →".
 - compares the SHA against `CLAWD_BUILD_SHA` (set by
   `firmware/scripts/embed_version.py` from `git rev-parse --short HEAD`)
 - streams `firmware.bin` into the inactive OTA partition via HTTPUpdate

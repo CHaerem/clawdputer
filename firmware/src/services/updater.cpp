@@ -46,8 +46,10 @@ constexpr const char* MANIFEST_URL =
     "https://github.com/CHaerem/clawdputer/releases/latest/download/version.txt";
 constexpr const char* FIRMWARE_URL =
     "https://github.com/CHaerem/clawdputer/releases/latest/download/firmware.bin";
-constexpr uint32_t HEALTH_CONFIRM_MS = 30UL * 1000UL;
-constexpr int      MAX_BOOT_ATTEMPTS = 3;
+constexpr uint32_t HEALTH_CONFIRM_MS    = 30UL * 1000UL;
+constexpr int      MAX_BOOT_ATTEMPTS    = 3;
+constexpr uint32_t BG_FIRST_CHECK_MS    = 60UL * 1000UL;            // 60s after boot
+constexpr uint32_t BG_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL; // 6h thereafter
 
 updater::Status g_status      = updater::Status::Idle;
 uint32_t        g_lastCheckMs = 0;
@@ -305,6 +307,48 @@ void persistRecoveryFailure(const char* reason) {
     ESP.restart();
 }
 
+// Background check task — periodically fetches the manifest so the UI can
+// show "update available" without the user blindly tapping "check & install".
+// Runs as its own low-priority FreeRTOS task because the TLS fetch can take
+// a few seconds; doing it from updater::tick() on the main loop would stall
+// the UI. mbedTLS DYNAMIC_BUFFER makes this safe to do live.
+TaskHandle_t g_bgTask = nullptr;
+
+void backgroundCheckTask(void*) {
+    vTaskDelay(pdMS_TO_TICKS(BG_FIRST_CHECK_MS));
+    for (;;) {
+        if (wifi::isConnected()) {
+            Serial.printf("[updater] bg check: free=%u largest=%u\n",
+                          (unsigned)ESP.getFreeHeap(),
+                          (unsigned)ESP.getMaxAllocHeap());
+            WiFiClientSecure client;
+            client.setInsecure();
+            std::string latest, builtAt;
+            if (fetchManifest(client, latest, builtAt)) {
+                g_latest         = latest;
+                g_latestBuiltAt  = builtAt;
+                g_lastError      = "";
+                g_lastCheckMs    = millis();
+                g_lastCheckEpoch = (uint32_t)time(nullptr);
+                if (latest == CLAWD_BUILD_SHA) {
+                    g_status = updater::Status::UpToDate;
+                } else {
+                    g_status = updater::Status::UpdateAvailable;
+                    Serial.printf("[updater] bg: update available %s -> %s\n",
+                                  CLAWD_BUILD_SHA, latest.c_str());
+                }
+                persistResult();
+            } else {
+                Serial.printf("[updater] bg check failed: %s\n",
+                              g_lastError.c_str());
+                // Don't persist failure — it's likely transient (wifi flake).
+                // The last good status stays in NVS so the UI doesn't flap.
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(BG_CHECK_INTERVAL_MS));
+    }
+}
+
 }  // namespace
 
 namespace updater {
@@ -349,9 +393,16 @@ void begin() {
         if (bootAttempts > MAX_BOOT_ATTEMPTS) {
             rollbackNow();   // does not return
         }
-        return;
+    } else {
+        prefs.end();
     }
-    prefs.end();
+
+    // Kick off the periodic background manifest check. Low priority — it
+    // shouldn't compete with UI or BLE for CPU.
+    if (!g_bgTask) {
+        xTaskCreate(backgroundCheckTask, "updater_bg",
+                    8192, nullptr, 1, &g_bgTask);
+    }
 }
 
 void tick() {
