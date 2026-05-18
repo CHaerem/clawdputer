@@ -1,0 +1,25 @@
+# clawdputer / retro app — default ROM manifest
+#
+# This file is hosted on GitHub Pages at:
+#   https://chaerem.github.io/clawdputer/roms-manifest.txt
+# and is the firmware's compiled-in default source.
+#
+# Edit this file in the repo to update what the device sees — a push to
+# main triggers the Pages workflow and the manifest is live within ~1 min.
+#
+# Format: one ROM URL per line. Optionally "Display name | URL" to override
+# the displayed name. '#' starts a line comment.
+
+# --- Blargg's Game Boy test ROMs (public domain) ---
+# Useful for verifying the emulator works correctly. From retrio/gb-test-roms
+# (mirror of Shay Green's original Blargg test suite).
+
+Blargg: CPU instructions          | https://raw.githubusercontent.com/retrio/gb-test-roms/master/cpu_instrs/cpu_instrs.gb
+Blargg: instruction timing        | https://raw.githubusercontent.com/retrio/gb-test-roms/master/instr_timing/instr_timing.gb
+Blargg: memory timing             | https://raw.githubusercontent.com/retrio/gb-test-roms/master/mem_timing/mem_timing.gb
+Blargg: memory timing 2           | https://raw.githubusercontent.com/retrio/gb-test-roms/master/mem_timing-2/mem_timing.gb
+Blargg: OAM bug                   | https://raw.githubusercontent.com/retrio/gb-test-roms/master/oam_bug/oam_bug.gb
+Blargg: HALT bug                  | https://raw.githubusercontent.com/retrio/gb-test-roms/master/halt_bug.gb
+Blargg: interrupt time            | https://raw.githubusercontent.com/retrio/gb-test-roms/master/interrupt_time/interrupt_time.gb
+Blargg: DMG sound                 | https://raw.githubusercontent.com/retrio/gb-test-roms/master/dmg_sound/dmg_sound.gb
+Blargg: CGB sound                 | https://raw.githubusercontent.com/retrio/gb-test-roms/master/cgb_sound/cgb_sound.gb
