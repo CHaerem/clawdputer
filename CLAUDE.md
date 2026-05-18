@@ -155,37 +155,41 @@ Every push to `main` that touches `firmware/**` runs
 `firmware.bin` + `version.txt` to the `latest` GitHub release.
 
 On device, `services/updater.cpp`:
-- only ever fetches `version.txt` and `firmware.bin` from inside a
-  recovery boot (see below) — there is no background poll, because the
-  github.com TLS handshake doesn't fit in the fragmented heap of a
-  fully-booted firmware on this hardware
+- fetches `version.txt` + `firmware.bin` and flashes from inside a
+  recovery boot (see below). The check is user-triggered from Settings
+  — there is no background poll.
 - compares the SHA against `CLAWD_BUILD_SHA` (set by
   `firmware/scripts/embed_version.py` from `git rev-parse --short HEAD`)
 - streams `firmware.bin` into the inactive OTA partition via HTTPUpdate
   when newer
 
-**TLS is recovery-boot only.** Anything that needs to reach github.com
-from this firmware — OTA, `services/github.cpp` issue submission used
-by `health.cpp` and the report app — runs against ~31 KB largest free
-block in normal operation, and mbedTLS wants ~36 KB. The report app
-gets away with it by releasing the canvas first and crossing fingers;
-`health.cpp` doesn't, so on submit failure it falls back to
-`services/telemetry.cpp` (a single NVS slot, last-wins) which the
-recovery boot drains after its own manifest fetch succeeds.
+**TLS works from normal boot.** This codebase builds Arduino as an
+ESP-IDF component (`framework = arduino, espidf`) so we can rebuild
+mbedTLS from source with `CONFIG_MBEDTLS_DYNAMIC_BUFFER=y` plus tuned
+content-len caps (`CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=4096`,
+`CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=2048`). With those, the github.com
+handshake fits in the fragmented heap of a fully-booted firmware. So
+`services/github.cpp` (used by `health.cpp` and the report app) and
+LibSSH (used by `apps/ssh`) talk HTTPS/TLS live from normal boot
+without ceremony. See `firmware/sdkconfig.defaults` for the full set of
+required flags — `AUTOSTART_ARDUINO=y`, `BT_NIMBLE_ENABLED=n` (we use
+the NimBLE-Arduino library instead), and `MBEDTLS_KEY_EXCHANGE_PSK=y`
+(else `ssl_client.cpp` fails to link) are non-obvious gotchas.
 
-**Recovery-boot OTA.** The StampS3 has no PSRAM and the prebuilt
-mbedTLS in Arduino-ESP32 2.x wants ~36 KB contiguous heap for the
-github.com handshake. After a full boot, fragmentation caps the
-largest free block at ~31 KB and the handshake fails. So the actual
-flash path is a **two-reboot dance**:
+`services/telemetry.cpp` (single NVS slot, last-wins) survives as an
+offline fallback for `report.cpp` when a live submit fails — it gets
+drained on the next successful direct submit, not by the recovery boot.
+
+**Recovery-boot OTA.** The OTA flash path still uses a recovery boot
+because HTTPUpdate streams ~1.8 MB and the simplest way to guarantee
+no contention with apps, BLE, SD, or the canvas is to do it from a
+minimal environment:
 1. Settings → "check & install →" calls `updater::installNow()` which
    writes `recovery=true` to NVS and reboots.
 2. `main.cpp::setup()` checks `updater::isRecoveryBoot()` *before*
    the canvas sprite, BLE, or apps are initialised. If set, it calls
    `updater::runRecovery()` — a minimal flow that connects WiFi,
-   fetches the manifest, drains any queued telemetry, and flashes via
-   stock `WiFiClientSecure`. With a pristine heap, the largest free
-   block is ~65 KB and the TLS handshake succeeds.
+   fetches the manifest, and flashes via stock `WiFiClientSecure`.
 3. On flash success, HTTPUpdate reboots into the new image. On no-op
    ("already up to date") or failure, the device reboots back into
    normal mode. Failure reasons are persisted in `rec_fail` and
@@ -213,8 +217,9 @@ sealed file only decrypts on the device whose key it was sealed
 against. An NVS wipe (correctly) destroys the device identity, so the
 sealed PAT will fail to decrypt afterwards (`[sealed]
 gcm_auth_decrypt failed -18`) and both `health.cpp` auto-issue
-submission and the report app's recovery-drain stop posting to
-GitHub. To re-seal:
+submission and the report app stop posting to GitHub. (The recovery
+boot no longer needs the seal key — `runRecoveryImpl()` only fetches
+the manifest and flashes.) To re-seal:
 
 1. Temporarily add `Serial.printf("[identity] SEAL_KEY=%s\n",
    g_sealKeyB64.c_str());` after `g_sealKeyB64.assign(...)` in
