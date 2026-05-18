@@ -301,17 +301,17 @@ void scanRoms() {
     }
 }
 
-// Baked-in defaults shown when /roms/sources.txt is absent. The user can
+// Baked-in default shown when /roms/sources.txt is absent. The user can
 // override by dropping their own sources.txt on the SD card; see
 // firmware/data/sources.txt.example for the format.
+//
+// The default points at a plain-text manifest hosted on this repo's
+// GitHub Pages — editable in web/roms-manifest.txt, deployed on push to
+// main via .github/workflows/pages.yml.
 struct DefaultSource { const char* name; const char* url; };
 constexpr DefaultSource kDefaultSources[] = {
-    { "Game Boy ROMs (romsgames.net)",
-      "https://www.romsgames.net/roms/gameboy/" },
-    { "Game Boy Color ROMs (romsgames.net)",
-      "https://www.romsgames.net/roms/gameboy-color/" },
-    { "Homebrew Hub — Game Boy",
-      "https://gbhh.avivace.com/" },
+    { "Default ROM manifest",
+      "https://chaerem.github.io/clawdputer/roms-manifest.txt" },
 };
 
 void buildSourcesList() {

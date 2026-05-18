@@ -1,30 +1,24 @@
 # clawdputer / retro app — ROM source manifests
 #
 # Copy this file to your SD card as /roms/sources.txt to override the
-# firmware's compiled-in defaults. Each non-comment line is a manifest URL.
+# firmware's compiled-in default. Each non-comment line is a manifest URL.
 #
 # A manifest URL is either:
+#   - A plain-text file — one ROM URL per line, optionally prefixed with
+#     "Display name | " to override the shown name. '#' starts a line
+#     comment.
 #   - An HTML page — the downloader scrapes <a href> values pointing at
 #     supported ROM extensions (.gb, .gbc, plus future cores).
-#   - A plain-text file — one ROM URL per line, optionally prefixed with
-#     "Display name | " to override the displayed name. '#' starts a
-#     line comment.
 #
-# Optional "Display | URL" syntax works in this file too — useful if a
-# URL is opaque.
+# Optional "Display | URL" syntax works in this file too.
 
-# --- ROM sites ---
-Game Boy ROMs | https://www.romsgames.net/roms/gameboy/
-Game Boy Color ROMs | https://www.romsgames.net/roms/gameboy-color/
+# --- The compiled-in default (kept here for reference) ---
+Default manifest | https://chaerem.github.io/clawdputer/roms-manifest.txt
 
-# --- Homebrew (legit, public-domain games) ---
-Homebrew Hub — Game Boy | https://gbhh.avivace.com/
+# --- Add your own manifests below ---
+# A gist, your own server, or any HTML index page works. Example:
+# My library | https://gist.githubusercontent.com/USER/HASH/raw/manifest.txt
 
-# --- Your own manifest (example) ---
-# Host a plain-text list of URLs on a gist / pastebin / your own server:
-# My Game Boy library | https://gist.githubusercontent.com/USER/HASH/raw/manifest.txt
-#
-# Sample manifest contents (one URL per line):
-#   https://example.com/roms/tetris.gb
-#   Pokemon Red | https://example.com/roms/pokemon_red.gbc
-#   # comments here ignored
+# --- Sample manifest contents (one URL per line) ---
+# https://example.com/roms/tetris.gb
+# Pokemon Red | https://example.com/roms/pokemon_red.gbc
