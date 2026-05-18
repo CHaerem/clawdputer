@@ -60,13 +60,17 @@ Preferences g_prefs;
 
 bool dedupAllow(const char* kind) {
     g_prefs.begin("health", false);
-    String key = String("la_") + kind;
-    uint32_t last = g_prefs.getUInt(key.c_str(), 0);
+    // NVS keys cap at 15 chars. "heap-fragmentation" / "stack-near-limit"
+    // overflow, so truncate. The four current kinds remain unique after
+    // truncation (heap-fragmen, heap-low, stack-near-l, prior-crash).
+    char key[16];
+    snprintf(key, sizeof(key), "la_%s", kind);
+    uint32_t last = g_prefs.getUInt(key, 0);
     uint32_t now  = (uint32_t)(millis() / 1000);
     // Use absolute uptime as a coarse cooldown; surviving reboots is fine
     // because each boot resets millis and we re-allow once per boot anyway.
     bool allow = (last == 0) || (now > last && now - last >= DEDUP_MIN_SECS);
-    if (allow) g_prefs.putUInt(key.c_str(), now);
+    if (allow) g_prefs.putUInt(key, now);
     g_prefs.end();
     return allow;
 }
