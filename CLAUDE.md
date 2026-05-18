@@ -253,23 +253,39 @@ ROMs loaded from `/roms/` on the SD card. Currently only GnuBoy
 (GB/GBC). Picker shows everything from `/roms/` matching a known
 extension and dispatches by ext to the right core.
 
-The device does **not** download ROMs. ROMs are managed declaratively
-in the repo:
+ROMs are declared in `web/roms-manifest.txt` (committed to the repo,
+public, also served via GitHub Pages at
+`https://chaerem.github.io/clawdputer/roms-manifest.txt`). The repo
+only stores URLs + display names — **never binaries**. Public-domain
+entries only (Blargg test ROMs ship by default; add more by editing
+the manifest).
 
-- `web/roms-manifest.txt` — public wishlist (name → URL). The repo
-  stores only references, never binaries. Public-domain entries only
-  (Blargg test ROMs ship by default).
-- `web/roms-manifest.private.txt` — gitignored. Same format; for
-  commercial ROMs you legally own, hosted on your own private storage.
-- `tools/sync-roms.sh [target]` — host-side script that reads both
-  manifests and downloads each entry into `target` (default
-  `./roms-out/`, gitignored). For an SD card on macOS:
-  `tools/sync-roms.sh /Volumes/<SD_LABEL>/roms`.
-- The display name on the left of `|` becomes the filename, so use
-  filesystem-safe names with the extension (`my_game.gb | URL`).
+Format: `filename.gb | https://url`. The left side becomes the
+filename on the SD card, so use filesystem-safe names with the
+extension.
 
-Don't commit ROM binaries to this repo. Don't add commercial ROM URLs
-to the public manifest. DMCA is real.
+Two ways to materialize the manifest:
+
+**1. On-device downloader** — `apps/retro` picker has a synthetic
+`[+ Download games]` row. Selecting it fetches the manifest URL via
+HTTPS, lists ROMs, and downloads the picked one straight to
+`/sd/roms/`. Pauses BLE + canvas during HTTPS for heap headroom (same
+pattern as `updater::installNow()`). Default manifest URL is hardcoded
+to the project's Pages address; edit `MANIFEST_URL` in `retro.cpp` to
+change.
+
+**2. Host sync** — `tools/sync-roms.sh [target]` mirrors the manifest
+(plus an optional `web/roms-manifest.private.txt`, gitignored, for
+commercial ROMs you legally own from your own private storage) into
+`target`. Default target `./roms-out/` (gitignored). For an SD card
+on macOS: `tools/sync-roms.sh /Volumes/<SD_LABEL>/roms`. Idempotent —
+skips files whose Content-Length matches.
+
+Use (1) for quick on-the-go additions; (2) for bulk sync or private
+ROMs that can't go in the public manifest.
+
+Don't commit ROM binaries. Don't add commercial ROM URLs to the
+public manifest. DMCA is real.
 
 ## Notes on the chat path
 

@@ -3,10 +3,14 @@
 // SMS/GG via SMSPlus, NGP via Race, …) plug in here as siblings: add an
 // entry to kSupportedExts, a Core enum value, and a case in dispatch().
 //
-// ROMs live under /roms/ on the SD card. Get them there by running
-// tools/sync-roms.sh on the host (see top-level README) — it reads
-// web/roms-manifest.txt and downloads each entry. The app itself stays
-// dumb: pick a ROM, play it.
+// ROMs live under /roms/ on the SD card. Two ways to get them there:
+//   - On-device: [+ Download games] in the picker pulls the project's
+//     public manifest from GitHub Pages and lets you pick a ROM to fetch.
+//     Only public-domain titles (Blargg test ROMs by default — edit
+//     web/roms-manifest.txt in the repo to extend the list).
+//   - From the host: tools/sync-roms.sh mirrors the same manifest plus
+//     an optional gitignored private manifest (commercial ROMs you own,
+//     hosted on your own private storage) to a target directory.
 //
 // Per-core notes:
 //   GnuBoy (GPLv2, firmware/lib/gnuboy/) — no sound in v1; pending a
@@ -22,8 +26,10 @@
 //   Tab returns to the launcher.
 
 #include <Arduino.h>
+#include <HTTPClient.h>
 #include <M5Cardputer.h>
 #include <SD.h>
+#include <WiFiClientSecure.h>
 #include <esp_timer.h>
 #include <esp_heap_caps.h>
 
@@ -36,6 +42,7 @@
 #include "core/registry.h"
 #include "services/ble.h"
 #include "services/sd.h"
+#include "services/wifi.h"
 #include "ui/canvas.h"
 #include "ui/list.h"
 #include "ui/statusbar.h"
@@ -47,8 +54,10 @@ extern "C" {
 
 namespace {
 
-constexpr const char* ROMS_DIR  = "/roms";
-constexpr const char* SAVES_DIR = "/saves";
+constexpr const char* ROMS_DIR     = "/roms";
+constexpr const char* SAVES_DIR    = "/saves";
+constexpr const char* MANIFEST_URL =
+    "https://chaerem.github.io/clawdputer/roms-manifest.txt";
 constexpr size_t      ROM_MAX_BYTES = 256 * 1024;
 
 enum class Core { Unknown, Gameboy };
@@ -59,8 +68,6 @@ struct SupportedExt {
     Core        core;
 };
 
-// Add new cores here. The picker and dispatcher both pivot off this table —
-// no other code touches the per-core mapping.
 constexpr SupportedExt kSupportedExts[] = {
     { ".gb",  "GB",  Core::Gameboy },
     { ".gbc", "GBC", Core::Gameboy },
@@ -69,7 +76,7 @@ constexpr SupportedExt kSupportedExts[] = {
     // { ".sms", "SMS", Core::Sms },
 };
 
-enum class Stage { Picker, Loading, Playing, Error };
+enum class Stage { Picker, Manifest, Loading, Playing, Error };
 
 struct PickerEntry {
     std::string filename;
@@ -90,6 +97,7 @@ struct PlayState {
 Stage                    g_stage = Stage::Picker;
 ui::list::State          g_picker;
 std::vector<PickerEntry> g_entries;
+ui::list::State          g_manifest;   // value = ROM URL
 PlayState                g_play;
 std::string              g_errorMsg;
 bool                     g_dirty = true;
@@ -109,34 +117,238 @@ const SupportedExt* matchExt(const std::string& filename) {
     return nullptr;
 }
 
+std::string trim(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    size_t b = s.find_last_not_of(" \t\r\n");
+    if (a == std::string::npos) return {};
+    return s.substr(a, b - a + 1);
+}
+
+// "filename.gb | URL" → split. Bare URL → derive name from URL basename.
+void parseManifestLine(const std::string& raw,
+                       std::string& nameOut, std::string& urlOut) {
+    std::string line = trim(raw);
+    auto bar = line.find('|');
+    if (bar != std::string::npos) {
+        nameOut = trim(line.substr(0, bar));
+        urlOut  = trim(line.substr(bar + 1));
+        return;
+    }
+    urlOut = line;
+    auto slash = line.find_last_of('/');
+    nameOut = (slash == std::string::npos) ? line : line.substr(slash + 1);
+    auto q = nameOut.find('?');
+    if (q != std::string::npos) nameOut = nameOut.substr(0, q);
+}
+
 void scanRoms() {
     g_picker.items.clear();
     g_entries.clear();
     g_picker.selected  = 0;
     g_picker.scrollTop = 0;
 
+    // Synthetic first row opens the on-device downloader.
+    g_picker.items.push_back({"[+ Download games]", "", true});
+    g_entries.push_back({"", Core::Unknown, ""});
+
     File dir = SD.open(ROMS_DIR);
-    if (!dir || !dir.isDirectory()) {
-        g_picker.items.push_back({"(no /roms on SD)", "", false});
-        return;
+    if (dir && dir.isDirectory()) {
+        File f;
+        while ((f = dir.openNextFile())) {
+            std::string name = f.name();
+            f.close();
+            auto slash = name.find_last_of('/');
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            const SupportedExt* ext = matchExt(name);
+            if (!ext) continue;
+            g_entries.push_back({name, ext->core, ext->label});
+            std::string label = std::string("[") + ext->label + "] " + name;
+            g_picker.items.push_back({label, "", false});
+        }
+        dir.close();
     }
-    File f;
-    while ((f = dir.openNextFile())) {
-        std::string name = f.name();
-        f.close();
-        auto slash = name.find_last_of('/');
-        if (slash != std::string::npos) name = name.substr(slash + 1);
-        const SupportedExt* ext = matchExt(name);
-        if (!ext) continue;
-        g_entries.push_back({name, ext->core, ext->label});
-        std::string label = std::string("[") + ext->label + "] " + name;
-        g_picker.items.push_back({label, "", false});
+    if (g_entries.size() <= 1) {
+        g_picker.items.push_back({"(no ROMs yet — use download above)", "", false});
+        g_entries.push_back({"", Core::Unknown, ""});
     }
-    dir.close();
-    if (g_entries.empty()) {
-        g_picker.items.push_back(
-            {"(empty — sync ROMs from host first)", "", false});
+}
+
+void drawProgress(const char* title, const char* sub, int pct) {
+    auto& d = M5Cardputer.Display;
+    d.fillScreen(BLACK);
+    d.setTextSize(2);
+    d.setTextColor(WHITE);
+    d.setCursor(8, 8);
+    d.print(title);
+    d.setTextSize(1);
+    d.setTextColor(0x8C71);
+    d.setCursor(8, 36);
+    d.print(sub);
+    int barX = 8, barY = 60, barW = 224, barH = 10;
+    d.drawRect(barX, barY, barW, barH, WHITE);
+    if (pct >= 0) {
+        int fill = (int)((barW - 2) * pct / 100);
+        d.fillRect(barX + 1, barY + 1, fill, barH - 2, 0x07E0);
     }
+}
+
+// Pause BLE + release canvas during HTTPS — mbedTLS handshake needs a
+// chunk of contiguous heap that our normal-mode allocations don't leave
+// free. Caller is responsible for invoking the returned restore function.
+struct UiPause {
+    bool hadCanvas;
+    bool wasBlePaused;
+};
+UiPause pauseUi() {
+    UiPause s{ ui::canvasActive(), ble::isPaused() };
+    if (s.hadCanvas)      ui::releaseCanvas();
+    if (!s.wasBlePaused)  ble::pause();
+    delay(50);
+    return s;
+}
+void restoreUi(const UiPause& s) {
+    if (!s.wasBlePaused) ble::resume();
+    if (s.hadCanvas)     ui::tryAcquireCanvas();
+}
+
+bool httpGetString(const std::string& url,
+                   std::string& bodyOut, std::string& errOut) {
+    if (!wifi::isConnected()) { errOut = "wifi offline"; return false; }
+    bool secure = url.rfind("https://", 0) == 0;
+    HTTPClient http;
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    bool ok;
+    WiFiClientSecure tls;
+    WiFiClient       plain;
+    if (secure) { tls.setInsecure(); ok = http.begin(tls, url.c_str()); }
+    else        { ok = http.begin(plain, url.c_str()); }
+    if (!ok) { errOut = "http begin failed"; return false; }
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        char buf[48]; snprintf(buf, sizeof(buf), "http %d", code);
+        errOut = buf; http.end(); return false;
+    }
+    bodyOut = http.getString().c_str();
+    http.end();
+    return true;
+}
+
+bool fetchManifest() {
+    UiPause guard = pauseUi();
+    drawProgress("loading manifest", MANIFEST_URL, -1);
+
+    std::string body, err;
+    bool ok = httpGetString(MANIFEST_URL, body, err);
+    restoreUi(guard);
+    if (!ok) { g_errorMsg = err; return false; }
+
+    g_manifest.items.clear();
+    g_manifest.selected  = 0;
+    g_manifest.scrollTop = 0;
+
+    size_t start = 0;
+    while (start <= body.size()) {
+        size_t nl = body.find('\n', start);
+        std::string line = trim(body.substr(start,
+            (nl == std::string::npos ? body.size() : nl) - start));
+        if (!line.empty() && line[0] != '#') {
+            std::string name, url;
+            parseManifestLine(line, name, url);
+            if (!url.empty() && matchExt(name))
+                g_manifest.items.push_back({name, url});
+        }
+        if (nl == std::string::npos) break;
+        start = nl + 1;
+    }
+    if (g_manifest.items.empty()) {
+        g_errorMsg = "manifest has no supported ROMs";
+        return false;
+    }
+    return true;
+}
+
+bool downloadRom(const std::string& filename, const std::string& url) {
+    if (!wifi::isConnected()) { g_errorMsg = "wifi offline"; return false; }
+
+    UiPause guard = pauseUi();
+    SD.mkdir(ROMS_DIR);
+    std::string path = std::string(ROMS_DIR) + "/" + filename;
+
+    drawProgress("downloading", filename.c_str(), 0);
+
+    bool secure = url.rfind("https://", 0) == 0;
+    HTTPClient http;
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    WiFiClientSecure tls;
+    WiFiClient       plain;
+    bool ok;
+    if (secure) { tls.setInsecure(); ok = http.begin(tls, url.c_str()); }
+    else        { ok = http.begin(plain, url.c_str()); }
+    if (!ok) { g_errorMsg = "http begin failed"; restoreUi(guard); return false; }
+
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        char buf[48]; snprintf(buf, sizeof(buf), "http %d", code);
+        g_errorMsg = buf; http.end(); restoreUi(guard); return false;
+    }
+
+    int total = http.getSize();
+    if (total > 0 && (size_t)total > ROM_MAX_BYTES) {
+        g_errorMsg = "ROM > 256 KB"; http.end(); restoreUi(guard); return false;
+    }
+
+    File out = SD.open(path.c_str(), FILE_WRITE);
+    if (!out) {
+        g_errorMsg = "SD open failed";
+        http.end(); restoreUi(guard); return false;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    uint8_t buf[1024];
+    int got = 0;
+    int lastPct = -1;
+    uint32_t deadline = millis() + 60000;
+    while (http.connected() && (total <= 0 || got < total)) {
+        size_t avail = stream->available();
+        if (avail) {
+            int n = stream->readBytes(buf, avail > sizeof(buf) ? sizeof(buf) : avail);
+            if (n <= 0) break;
+            if ((size_t)(got + n) > ROM_MAX_BYTES) {
+                g_errorMsg = "ROM > 256 KB";
+                out.close(); SD.remove(path.c_str()); http.end();
+                restoreUi(guard);
+                return false;
+            }
+            out.write(buf, n);
+            got += n;
+            if (total > 0) {
+                int pct = (int)((int64_t)got * 100 / total);
+                if (pct != lastPct) {
+                    drawProgress("downloading", filename.c_str(), pct);
+                    lastPct = pct;
+                }
+            }
+            deadline = millis() + 60000;
+        } else if (millis() > deadline) {
+            g_errorMsg = "download timeout";
+            out.close(); SD.remove(path.c_str()); http.end();
+            restoreUi(guard);
+            return false;
+        } else {
+            delay(1);
+        }
+    }
+    out.close();
+    http.end();
+
+    if (got == 0) {
+        g_errorMsg = "empty download";
+        SD.remove(path.c_str());
+        restoreUi(guard);
+        return false;
+    }
+    restoreUi(guard);
+    return true;
 }
 
 bool loadRom(const std::string& filename) {
@@ -328,7 +540,21 @@ void dispatch(Core core, const std::string& filename) {
 
 void startSelected() {
     if (g_entries.empty() || g_picker.selected >= (int)g_entries.size()) return;
+
+    // Picker row 0 is the synthetic "[+ Download games]" sentinel.
+    if (g_picker.selected == 0) {
+        g_errorMsg.clear();
+        if (fetchManifest()) {
+            g_stage = Stage::Manifest;
+        } else {
+            g_stage = Stage::Error;
+        }
+        g_dirty = true;
+        return;
+    }
+
     const auto& entry = g_entries[g_picker.selected];
+    if (entry.filename.empty()) return;   // info row
 
     g_stage = Stage::Loading;
     g_dirty = true;
@@ -343,6 +569,21 @@ void startSelected() {
     dispatch(entry.core, entry.filename);
 }
 
+void downloadFromManifest() {
+    if (g_manifest.items.empty()) return;
+    const auto& item = g_manifest.items[g_manifest.selected];
+    if (item.value.empty()) return;
+
+    g_errorMsg.clear();
+    if (downloadRom(item.label, item.value)) {
+        scanRoms();
+        g_stage = Stage::Picker;
+    } else {
+        g_stage = Stage::Error;
+    }
+    g_dirty = true;
+}
+
 void renderPicker() {
     auto& d = ui::display();
     ui::beginFrame();
@@ -355,6 +596,21 @@ void renderPicker() {
     d.setCursor(6, 124);
     d.setTextColor(0x8C71);
     d.print("enter play   tab home");
+    ui::flush();
+}
+
+void renderManifest() {
+    auto& d = ui::display();
+    ui::beginFrame();
+    ui::statusbar::draw();
+    d.setTextSize(1);
+    d.setTextColor(0xFFE0);
+    d.setCursor(6, 18);
+    d.print("Pick a ROM to download");
+    ui::list::draw(g_manifest, 6, 32, 228, 90);
+    d.setCursor(6, 124);
+    d.setTextColor(0x8C71);
+    d.print("enter download   bksp back");
     ui::flush();
 }
 
@@ -406,6 +662,11 @@ void onKey(char ch) {
             if (ch == '\n') startSelected();
             else if (ui::list::onKey(g_picker, ch)) g_dirty = true;
             break;
+        case Stage::Manifest:
+            if (ch == '\n')      downloadFromManifest();
+            else if (ch == '\b') { g_stage = Stage::Picker; g_dirty = true; }
+            else if (ui::list::onKey(g_manifest, ch)) g_dirty = true;
+            break;
         case Stage::Playing:
             break;
         case Stage::Loading:
@@ -420,10 +681,11 @@ void onKey(char ch) {
 void onDraw() {
     if (!g_dirty) return;
     switch (g_stage) {
-        case Stage::Picker:  renderPicker();  break;
-        case Stage::Loading: renderLoading(); break;
-        case Stage::Playing: break;
-        case Stage::Error:   renderError();   break;
+        case Stage::Picker:   renderPicker();   break;
+        case Stage::Manifest: renderManifest(); break;
+        case Stage::Loading:  renderLoading();  break;
+        case Stage::Playing:  break;
+        case Stage::Error:    renderError();    break;
     }
     g_dirty = false;
 }
@@ -432,7 +694,7 @@ App retro_app = {
     .id           = "retro",
     .name         = "Retro",
     .description  = "Game console emulators",
-    .services     = SVC_SD | SVC_CANVAS,
+    .services     = SVC_WIFI | SVC_SD | SVC_CANVAS,
     .onEnter      = onEnter,
     .onExit       = onExit,
     .onTick       = onTick,
