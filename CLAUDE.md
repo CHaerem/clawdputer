@@ -180,21 +180,21 @@ the NimBLE-Arduino library instead), and `MBEDTLS_KEY_EXCHANGE_PSK=y`
 offline fallback for `report.cpp` when a live submit fails — it gets
 drained on the next successful direct submit, not by the recovery boot.
 
-**Recovery-boot OTA.** The OTA flash path still uses a recovery boot
-because HTTPUpdate streams ~1.8 MB and the simplest way to guarantee
-no contention with apps, BLE, SD, or the canvas is to do it from a
-minimal environment:
-1. Settings → "check & install →" calls `updater::installNow()` which
-   writes `recovery=true` to NVS and reboots.
-2. `main.cpp::setup()` checks `updater::isRecoveryBoot()` *before*
-   the canvas sprite, BLE, or apps are initialised. If set, it calls
-   `updater::runRecovery()` — a minimal flow that connects WiFi,
-   fetches the manifest, and flashes via stock `WiFiClientSecure`.
-3. On flash success, HTTPUpdate reboots into the new image. On no-op
-   ("already up to date") or failure, the device reboots back into
-   normal mode. Failure reasons are persisted in `rec_fail` and
-   surfaced as `Status::Failed` / `lastError()` on the next normal
-   boot.
+**Live OTA from normal boot.** `updater::installNow()` runs HTTPUpdate
+in place: pauses BLE + releases the canvas + pauses SD to free
+contiguous heap, fetches the manifest, streams `firmware.bin` via
+stock `WiFiClientSecure` + HTTPUpdate, and reboots into the new image
+on success (single reboot via `rebootOnUpdate(true)`). On failure the
+UI is restored and the caller returns — no forced reboot. Status and
+last error are persisted to NVS for the Settings UI.
+
+**Recovery boot still exists as a fallback** (`scheduleRecoveryUpdate()`
++ `runRecoveryImpl()`) but is no longer the primary path. The two-
+reboot dance was a workaround for the old prebuilt-mbedTLS heap
+constraint, which Phase 1 eliminated. Recovery is kept until the live
+path has proven stable across a release cycle, then it'll be deleted.
+Currently `report.cpp` uses it as a last-resort fallback if a live
+issue submit fails.
 
 **Rollback** is app-level (ESP-IDF's built-in rollback is not enabled
 because it requires a framework rebuild):
