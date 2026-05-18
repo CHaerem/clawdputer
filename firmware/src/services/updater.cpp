@@ -56,6 +56,21 @@ constexpr uint32_t BG_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL; // 6h ther
 // + canvas which clears the headroom regardless.
 constexpr size_t   BG_MIN_LARGEST_BLOCK = 28UL * 1024UL;
 
+// Decides whether a published release should be flagged as an update worth
+// installing. SHA mismatch alone isn't enough — if the device's build date
+// is on or after the published one, this is a downgrade (e.g. a local USB
+// flash that ran ahead of CI). Falls back to plain SHA comparison when
+// either date is missing.
+bool isRealUpgrade(const std::string& latestSha, const std::string& latestDate) {
+    if (latestSha == CLAWD_BUILD_SHA) return false;
+    std::string deviceDate = CLAWD_BUILD_DATE;
+    if (!deviceDate.empty() && !latestDate.empty()) {
+        // ISO 8601 YYYY-MM-DD lex-compares correctly.
+        return latestDate > deviceDate;
+    }
+    return true;
+}
+
 updater::Status g_status      = updater::Status::Idle;
 uint32_t        g_lastCheckMs = 0;
 uint32_t        g_lastCheckEpoch = 0;
@@ -263,12 +278,17 @@ bool runBackgroundCheck() {
         g_lastError      = "";
         g_lastCheckMs    = millis();
         g_lastCheckEpoch = (uint32_t)time(nullptr);
-        if (latest == CLAWD_BUILD_SHA) {
-            g_status = updater::Status::UpToDate;
-        } else {
+        if (isRealUpgrade(latest, builtAt)) {
             g_status = updater::Status::UpdateAvailable;
             Serial.printf("[updater] bg: update available %s -> %s\n",
                           CLAWD_BUILD_SHA, latest.c_str());
+        } else {
+            g_status = updater::Status::UpToDate;
+            if (latest != CLAWD_BUILD_SHA) {
+                Serial.printf("[updater] bg: device sha=%s newer than published %s (date %s vs %s)\n",
+                              CLAWD_BUILD_SHA, latest.c_str(),
+                              CLAWD_BUILD_DATE, builtAt.c_str());
+            }
         }
         persistResult();
     } else {
@@ -425,14 +445,17 @@ void installNow() {
         return;
     }
 
-    if (latest == CLAWD_BUILD_SHA) {
+    if (!isRealUpgrade(latest, builtAt)) {
         g_status         = Status::UpToDate;
         g_latest         = latest;
         g_latestBuiltAt  = builtAt;
         g_lastError      = "";
         g_lastCheckEpoch = (uint32_t)time(nullptr);
         persistResult();
-        drawInstall("already up to date", 100);
+        const char* msg = (latest == CLAWD_BUILD_SHA)
+                            ? "already up to date"
+                            : "device is newer";
+        drawInstall(msg, 100);
         delay(1500);
         restoreUi();
         return;
