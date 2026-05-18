@@ -6,6 +6,7 @@
 #include "canvas.h"
 #include "services/ble.h"
 #include "services/bridge.h"
+#include "services/updater.h"
 #include "services/wifi.h"
 
 namespace ui::statusbar {
@@ -69,6 +70,14 @@ void draw() {
     d.setTextColor(0x8C71);
     d.print("wf");
     drawLinkDot(68, y + 3, wifi::isConnected());
+
+    // Update-available indicator: small yellow up-arrow when a newer
+    // release is on github. Tap Settings → "check & install →" to flash.
+    if (updater::status() == updater::Status::UpdateAvailable) {
+        d.setCursor(78, y);
+        d.setTextColor(0xFFE0);
+        d.print("\x18");   // CP437 up-arrow (M5GFX font 1)
+    }
 
     // Battery percent + icon, right-most
     int  pct      = M5Cardputer.Power.getBatteryLevel();
