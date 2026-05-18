@@ -2,6 +2,32 @@
 // Browser reimplementation of the firmware UI on a 240×135 canvas. Apps
 // mirror the layouts and key bindings of firmware/src/apps/*.
 
+// ── persistent storage (localStorage) ──────────────────────────────────────
+
+const STORE_PREFIX = 'clawd:v1:';
+const store = {
+  get(key, def) {
+    try {
+      const raw = localStorage.getItem(STORE_PREFIX + key);
+      if (raw === null) return def;
+      return JSON.parse(raw);
+    } catch { return def; }
+  },
+  set(key, val) {
+    try { localStorage.setItem(STORE_PREFIX + key, JSON.stringify(val)); } catch {}
+  },
+  clearAll() {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(STORE_PREFIX)) keys.push(k);
+      }
+      keys.forEach(k => localStorage.removeItem(k));
+    } catch {}
+  },
+};
+
 // ── colour helpers ──────────────────────────────────────────────────────────
 
 function rgb565(c) {
@@ -205,6 +231,10 @@ function drawStatusbar(d) {
 
 const apps = [];
 function registerApp(a) { apps.push(a); }
+function unregisterApp(id) {
+  const i = apps.findIndex(a => a.id === id);
+  if (i >= 0) apps.splice(i, 1);
+}
 
 let currentApp = null;
 let dirty = true;
@@ -256,24 +286,25 @@ function tileAccent(a) {
 
 const home = {
   id: 'home', name: 'Home', description: 'Launcher',
-  sel: 0,
+  sel: store.get('home.sel', 0),
   tiles: [],
   rebuild() {
     this.tiles = apps.filter(a => a.id !== 'home' && !a.hidden);
     if (this.sel >= this.tiles.length) this.sel = 0;
   },
+  saveSel() { store.set('home.sel', this.sel); },
   onEnter() { this.rebuild(); markDirty(); },
   onExit() {},
   onTick() { /* nothing — status updates dirty via markDirty */ },
   onKey(ch) {
     const n = this.tiles.length;
     if (!n) return;
-    if (ch === KEY.LEFT || ch === KEY.UP) { this.sel = (this.sel - 1 + n) % n; markDirty(); }
-    else if (ch === KEY.RIGHT || ch === KEY.DOWN) { this.sel = (this.sel + 1) % n; markDirty(); }
+    if (ch === KEY.LEFT || ch === KEY.UP) { this.sel = (this.sel - 1 + n) % n; this.saveSel(); markDirty(); }
+    else if (ch === KEY.RIGHT || ch === KEY.DOWN) { this.sel = (this.sel + 1) % n; this.saveSel(); markDirty(); }
     else if (ch === '\n') { requestApp(this.tiles[this.sel].id); }
     else if (ch >= '1' && ch <= '9') {
       const idx = ch.charCodeAt(0) - 49;
-      if (idx < n) { this.sel = idx; requestApp(this.tiles[idx].id); }
+      if (idx < n) { this.sel = idx; this.saveSel(); requestApp(this.tiles[idx].id); }
     }
   },
   onDraw(d) {
@@ -458,35 +489,74 @@ function drawCrab(d, ox, oy, state, now) {
   }
 }
 
+const BUDDY_PROMPT_POOL = [
+  { tool: 'mcp__github__list_pull_requests',     hint: 'repo: CHaerem/clawdputer' },
+  { tool: 'Bash',                                hint: 'pio run -e cardputer -t upload' },
+  { tool: 'Edit',                                hint: 'firmware/src/apps/chat/chat.cpp' },
+  { tool: 'mcp__github__create_pull_request',    hint: 'web: persistent demo memory' },
+  { tool: 'Read',                                hint: 'host/Sources/clawd-bridge/Bridge.swift' },
+  { tool: 'WebFetch',                            hint: 'docs.m5stack.com/en/core/Cardputer-Adv' },
+  { tool: 'Bash',                                hint: 'swift build && swift test' },
+  { tool: 'Write',                               hint: 'firmware/src/apps/notes/notes.cpp' },
+  { tool: 'mcp__github__add_issue_comment',      hint: 'issue #42: OTA rollback edge case' },
+  { tool: 'Grep',                                hint: 'pattern: REGISTER_APP, glob: **/*.cpp' },
+];
+
 const buddy = {
   id: 'buddy', name: 'Buddy', description: 'Claude Desktop companion',
   state: 'idle', pet: 'sleep',
-  owner: 'christopher', tokens: 12480, total: 3, running: 1, waiting: 0,
-  prompt: null, approvals: 0, denials: 0,
-  enteredAt: 0, scriptAt: 0,
+  owner: store.get('buddy.owner', 'christopher'),
+  tokens: store.get('buddy.tokens', 12480),
+  total: 3, running: 1, waiting: 0,
+  prompt: store.get('buddy.prompt', null),
+  approvals: store.get('buddy.approvals', 0),
+  denials: store.get('buddy.denials', 0),
+  enteredAt: 0,
+  lastPromptAt: 0,
+  nextPromptDelay: 0,
+  petUntil: 0,
+  save() {
+    store.set('buddy.tokens', this.tokens);
+    store.set('buddy.approvals', this.approvals);
+    store.set('buddy.denials', this.denials);
+    store.set('buddy.prompt', this.prompt);
+  },
+  scheduleNext(firstOnEnter = false) {
+    this.lastPromptAt = performance.now();
+    this.nextPromptDelay = firstOnEnter
+      ? 4500 + Math.random() * 2000
+      : 18000 + Math.random() * 22000;
+  },
+  newPrompt() {
+    const t = BUDDY_PROMPT_POOL[Math.floor(Math.random() * BUDDY_PROMPT_POOL.length)];
+    this.prompt = { id: 'p' + Date.now().toString(36), tool: t.tool, hint: t.hint };
+    this.pet = 'attention';
+    this.save();
+  },
   onEnter() {
     this.enteredAt = performance.now();
-    this.scriptAt = 0;
-    // simulate connect handshake + activity
     link.nus = false;
-    this.prompt = null;
+    this.scheduleNext(!this.prompt);
     markDirty();
   },
   onExit() {},
   onTick() {
-    const t = performance.now() - this.enteredAt;
-    if (!link.nus && t > 1800) { link.nus = true; markDirty(); }
-    if (link.nus && !this.prompt && t > 5500 && this.scriptAt < 1) {
-      this.scriptAt = 1;
-      this.prompt = {
-        id: 'p1',
-        tool: 'mcp__github__list_pull_requests',
-        hint: 'repo: CHaerem/clawdputer',
-      };
-      this.pet = 'attention';
+    const now = performance.now();
+    const t = now - this.enteredAt;
+    if (!link.nus && t > 1500) { link.nus = true; markDirty(); }
+    if (link.nus && !this.prompt && (now - this.lastPromptAt) > this.nextPromptDelay) {
+      this.newPrompt();
       markDirty();
     }
-    // pet bobs animate continuously
+    // token meter tick — background activity
+    if (link.nus && Math.random() < 0.04) {
+      this.tokens += Math.floor(Math.random() * 25);
+      store.set('buddy.tokens', this.tokens);
+    }
+    if (this.petUntil && now > this.petUntil) {
+      this.petUntil = 0;
+      this.pet = this.prompt ? 'attention' : 'idle';
+    }
     markDirty();
   },
   onKey(ch) {
@@ -497,10 +567,15 @@ const buddy = {
     if (ch === '\n' || ch === 'y' || ch === 'Y') {
       this.approvals++; this.prompt = null;
       this.pet = 'heart';
-      setTimeout(() => { this.pet = 'busy'; markDirty(); }, 2200);
+      this.petUntil = performance.now() + 2200;
+      this.scheduleNext();
+      this.save();
       markDirty();
     } else if (ch === '\b' || ch === 'n' || ch === 'N' || ch === KEY.ESC) {
-      this.denials++; this.prompt = null; this.pet = 'idle';
+      this.denials++; this.prompt = null;
+      this.pet = 'idle';
+      this.scheduleNext();
+      this.save();
       markDirty();
     }
   },
@@ -562,33 +637,165 @@ registerApp(buddy);
 
 // ── CHAT ────────────────────────────────────────────────────────────────────
 
-const CHAT_REPLIES = [
-  { status: 'connecting to clawd-bridge…' },
-  { status: '⚙ Read' },
-  { chunk: 'The Cardputer firmware registers apps via a static `REGISTER_APP()` macro ' },
-  { chunk: 'in each app translation unit. See firmware/src/core/app.h:53 — the registrar ' },
-  { chunk: "runs before main(), so the home launcher's app list is fully populated by " },
-  { chunk: 'the time setup() returns.\n\n' },
-  { status: '⚙ Grep' },
-  { chunk: 'Adding a new app is one directory under firmware/src/apps/<name>/ with a ' },
-  { chunk: '.cpp that defines the App struct and ends with REGISTER_APP(). The launcher ' },
-  { chunk: 'picks it up automatically.' },
-  { end: 187 },
+// Knowledge-base for the simulated `claude` CLI. Each entry has a regex,
+// optional fake tool-use statuses, and a body. The body is streamed
+// chunk-by-chunk to mimic the real stream-json output.
+const CHAT_KB = [
+  {
+    match: /\b(register|registry|new app|add.*app|REGISTER_APP|how.*app)\b/i,
+    tools: ['Read', 'Grep'],
+    body:
+      'Each firmware app lives in firmware/src/apps/<name>/<name>.cpp and ends with ' +
+      'REGISTER_APP(my_app). The registrar runs before main() (static init), so the ' +
+      'home launcher\'s tile list is fully populated by the time setup() returns.\n\n' +
+      'Adding a new one: define a struct App { .id, .name, .description, .onEnter, ' +
+      '.onTick, .onKey, .onDraw, .services }, call REGISTER_APP — done. Set .services ' +
+      'to SVC_BLE | SVC_WIFI | SVC_SD as needed; the framework starts/stops radios on ' +
+      'app switch.',
+  },
+  {
+    match: /\b(buddy|nus|claude desktop|approve|deny|companion)\b/i,
+    tools: ['Read'],
+    body:
+      'Buddy speaks Anthropic\'s buddy protocol over the Nordic UART Service (NUS) ' +
+      'BLE service. Claude Desktop is the only peer. The device is read-only for ' +
+      'status and read/write only for permission decisions (approve/deny tool prompts). ' +
+      'It runs in parallel with the clawd-bridge service on the same peripheral, so ' +
+      'Desktop and the bridge can both be connected at the same time.',
+  },
+  {
+    match: /\b(bridge|clawd-bridge|host daemon|mac side|swift|cli)\b/i,
+    tools: ['Read'],
+    body:
+      'clawd-bridge is a Swift daemon on the Mac (CoreBluetooth + a TCP listener for ' +
+      'WiFi fallback). On every chat turn it spawns `claude -p --output-format ' +
+      'stream-json --include-partial-messages` (with --continue after the first turn), ' +
+      'parses the NDJSON events, and forwards text deltas + tool-use markers back to ' +
+      'the device. Conversation history lives wherever the CLI keeps it, keyed by cwd.',
+  },
+  {
+    match: /\b(ota|update|self.?update|gitops|flash|firmware\.bin)\b/i,
+    tools: ['Read', 'WebFetch'],
+    body:
+      'Every push to main that touches firmware/** runs .github/workflows/firmware.yml. ' +
+      'It builds firmware.bin + version.txt and uploads them to the GitHub `latest` ' +
+      'release. On the device, services/updater compares CLAWD_BUILD_SHA against the ' +
+      'manifest, streams the new image into the inactive OTA partition via HTTPUpdate, ' +
+      'and reboots. Rollback: pending=true is written to NVS before flashing — three ' +
+      'unhealthy boots in a row flips the boot partition back to the previous slot.',
+  },
+  {
+    match: /\b(ssh|sealed|host preset|ed25519)\b/i,
+    tools: ['Read'],
+    body:
+      'The SSH app uses LibSSH with an on-device Ed25519 keypair (generated once, ' +
+      'stored in NVS). Host presets are AES-256-GCM-sealed against the per-device ' +
+      'seal key — only the device that generated the key can decrypt them, so the ' +
+      'sealed blob can safely live in the repo at firmware/secrets/ssh_hosts.sealed.',
+  },
+  {
+    match: /\b(wifi|network|mdns|secret)\b/i,
+    tools: ['Read'],
+    body:
+      'WiFi credentials persist in NVS. The wifi app scans, lets you pick an SSID, ' +
+      'and saves on success. mDNS advertises the device as clawdputer.local so OTA ' +
+      'and the bridge\'s TCP fallback can find it without hardcoded IPs.',
+  },
+  {
+    match: /\b(seal|secret|aes|gcm|identity)\b/i,
+    tools: ['Read'],
+    body:
+      'Sealed secrets are AES-256-GCM with a 32-byte key generated once per device ' +
+      'and stored in NVS namespace `identity`. Multi-device support would mean ' +
+      'deriving the seal key from the eFuse MAC (weaker — anyone with the MAC can ' +
+      'decrypt). Single-developer setup so per-device sealing is fine.',
+  },
+  {
+    match: /\b(retro|game|snake|tetris|gameboy|gb|rom)\b/i,
+    tools: ['Read'],
+    body:
+      'Two native games (Snake, Tetris) ship in the launcher today. The Game Boy ' +
+      'emulator stack was dropped — streaming ROMs from SD ended up too constrained ' +
+      'on this hardware. The native games hit 60fps comfortably with the backbuffer ' +
+      'sprite UI primitive.',
+  },
+  {
+    match: /\b(memory|persist|browser|localstorage|demo)\b/i,
+    tools: [],
+    body:
+      'This is the web demo — everything you do here lives in your browser\'s ' +
+      'localStorage. Chat history, SSH hosts you add, Buddy approve/deny counts, ' +
+      'and Settings selections all survive a page reload. Wipe it any time from ' +
+      'Settings → "reset demo memory".',
+  },
+  {
+    match: /\b(hi|hello|hey|sup|hola|yo)\b/i,
+    tools: [],
+    body:
+      'Hi! I\'m the simulated clawdputer chat — try asking about the app registry, ' +
+      'the bridge daemon, the OTA flow, sealed SSH presets, or how the buddy ' +
+      'protocol works. Whatever you type stays in your browser.',
+  },
+  {
+    match: /\b(help|what can|capabilities|features)\b/i,
+    tools: [],
+    body:
+      'Things to ask the simulated CLI:\n' +
+      '  • how does the app registry work\n' +
+      '  • what is the bridge\n' +
+      '  • how does ota work\n' +
+      '  • how are ssh hosts sealed\n' +
+      '  • tell me about the buddy protocol\n' +
+      'Everything streams just like the real `claude -p` output.',
+  },
+];
+
+const CHAT_FALLBACK = {
+  tools: ['Read', 'Grep'],
+  body:
+    'I don\'t have a canned answer for that in the demo KB, but the real device runs ' +
+    '`claude -p --output-format stream-json` through clawd-bridge and would give you ' +
+    'a proper answer here. Try asking about: apps, buddy, the bridge, OTA, SSH, or ' +
+    'sealed secrets.',
+};
+
+function chunkBody(body) {
+  // Stream in word groups of 4–10 chars to look like real token deltas
+  const out = [];
+  let i = 0;
+  while (i < body.length) {
+    const step = 4 + Math.floor(Math.random() * 12);
+    let end = Math.min(i + step, body.length);
+    // try not to split inside a word
+    if (end < body.length && body[end] !== ' ' && body[end] !== '\n') {
+      const nextSpace = body.indexOf(' ', end);
+      if (nextSpace !== -1 && nextSpace - end < 8) end = nextSpace;
+    }
+    out.push(body.slice(i, end));
+    i = end;
+  }
+  return out;
+}
+
+const DEFAULT_CHAT_LINES = [
+  { text: 'bridge connected (tcp via mDNS)', kind: 'status' },
+  { text: 'try: "how does the app registry work?"', kind: 'status' },
 ];
 
 const chat = {
   id: 'chat', name: 'Chat', description: 'Claude CLI remote',
   keysAsArrows: false,
-  lines: [], input: '', busy: false, scriptIdx: 0, scriptTimer: null,
+  lines: store.get('chat.lines', null) || DEFAULT_CHAT_LINES.slice(),
+  input: '', busy: false,
+  scriptQueue: [], scriptTimer: null,
+  save() { store.set('chat.lines', this.lines.slice(-200)); },
   onEnter() {
     link.wifi = true;
     link.bridgeTcp = true;
-    this.lines = [
-      { text: 'bridge connected (tcp via mDNS)', kind: 'status' },
-      { text: 'try: "how does the app registry work?"', kind: 'status' },
-    ];
+    if (!this.lines.length) this.lines = DEFAULT_CHAT_LINES.slice();
     this.input = '';
     this.busy = false;
+    this.scriptQueue = [];
     markDirty();
   },
   onExit() {
@@ -597,34 +804,62 @@ const chat = {
   pushLine(text, kind) {
     this.lines.push({ text, kind });
     if (this.lines.length > 200) this.lines.shift();
+    this.save();
     markDirty();
   },
   appendAssistant(chunk) {
     const last = this.lines[this.lines.length - 1];
     if (last && last.kind === 'assistant') { last.text += chunk; }
     else this.lines.push({ text: chunk, kind: 'assistant' });
+    if (this.lines.length > 200) this.lines.shift();
+    this.save();
     markDirty();
   },
-  scheduleNext() {
-    if (this.scriptIdx >= CHAT_REPLIES.length) {
-      this.busy = false; markDirty(); return;
+  pickReply(prompt) {
+    for (const entry of CHAT_KB) {
+      if (entry.match.test(prompt)) return entry;
     }
-    const step = CHAT_REPLIES[this.scriptIdx++];
-    const delay = step.chunk ? 90 + Math.random() * 120 : 350;
+    return CHAT_FALLBACK;
+  },
+  buildScript(prompt) {
+    const reply = this.pickReply(prompt);
+    const queue = [];
+    queue.push({ status: 'connecting to clawd-bridge…', delay: 300 });
+    for (const t of reply.tools) queue.push({ status: '⚙ ' + t, delay: 380 });
+    for (const c of chunkBody(reply.body)) {
+      queue.push({ chunk: c, delay: 70 + Math.random() * 90 });
+    }
+    const tokens = Math.max(40, Math.floor(reply.body.length / 4));
+    queue.push({ status: `[${tokens} tokens]`, delay: 200 });
+    return queue;
+  },
+  scheduleNext() {
+    if (!this.scriptQueue.length) {
+      this.busy = false; this.save(); markDirty(); return;
+    }
+    const step = this.scriptQueue.shift();
     this.scriptTimer = setTimeout(() => {
-      if (currentApp !== chat) return;
+      if (currentApp !== chat) {
+        this.busy = false; this.scriptQueue = []; return;
+      }
       if (step.chunk) this.appendAssistant(step.chunk);
       else if (step.status) this.pushLine(step.status, 'status');
-      else if (step.end !== undefined) this.pushLine(`[${step.end} tokens]`, 'status');
       this.scheduleNext();
-    }, delay);
+    }, step.delay);
   },
   send() {
     if (!this.input.trim()) return;
-    this.pushLine(this.input, 'user');
+    if (this.busy) return;
+    const prompt = this.input;
+    this.pushLine(prompt, 'user');
     this.input = '';
+    if (/^\/clear\b/i.test(prompt)) {
+      this.lines = DEFAULT_CHAT_LINES.slice();
+      this.save();
+      return;
+    }
     this.busy = true;
-    this.scriptIdx = 0;
+    this.scriptQueue = this.buildScript(prompt);
     this.scheduleNext();
   },
   onTick() { markDirty(); /* cursor blink */ },
@@ -703,31 +938,123 @@ registerApp(chat);
 
 // ── SSH ─────────────────────────────────────────────────────────────────────
 
+const SSH_SEALED_HOSTS = [
+  { name: 'mac-mini',  host: '10.0.0.12',  user: 'chris',  source: 'sealed' },
+  { name: 'studio',    host: '10.0.0.21',  user: 'chris',  source: 'sealed' },
+  { name: 'pi-pixel',  host: '10.0.0.40',  user: 'pi',     source: 'sealed' },
+];
+
+const SSH_FIELDS = [
+  { key: 'name', label: 'name',     hint: 'short label' },
+  { key: 'host', label: 'host/ip',  hint: '10.0.0.x or name.local' },
+  { key: 'user', label: 'username', hint: 'remote login user' },
+];
+
 const ssh = {
   id: 'ssh', name: 'SSH', description: 'Key-auth SSH client',
-  hosts: [
-    { name: 'mac-mini',  host: '10.0.0.12',  user: 'chris',  source: 'sealed' },
-    { name: 'studio',    host: '10.0.0.21',  user: 'chris',  source: 'sealed' },
-    { name: 'pi-pixel',  host: '10.0.0.40',  user: 'pi',     source: 'sealed' },
-    { name: '+ add new host…', host: '',     user: '',       source: 'action' },
-  ],
+  keysAsArrows: false,
+  userHosts: store.get('ssh.userHosts', []),
   sel: 0,
   connecting: null,
-  onEnter() { this.sel = 0; this.connecting = null; markDirty(); },
+  mode: 'list',
+  form: { name: '', host: '', user: '' },
+  formIdx: 0,
+  hosts() {
+    return SSH_SEALED_HOSTS.concat(this.userHosts).concat([
+      { name: '+ add new host…', host: '', user: '', source: 'action' },
+    ]);
+  },
+  save() { store.set('ssh.userHosts', this.userHosts); },
+  onEnter() {
+    this.sel = 0; this.connecting = null;
+    this.mode = 'list';
+    this.form = { name: '', host: '', user: '' };
+    this.formIdx = 0;
+    markDirty();
+  },
   onExit() {},
   onTick() {},
+  enterForm() {
+    this.mode = 'form';
+    this.form = { name: '', host: '', user: '' };
+    this.formIdx = 0;
+    markDirty();
+  },
+  saveForm() {
+    const f = this.form;
+    if (!f.name.trim() || !f.host.trim() || !f.user.trim()) return false;
+    this.userHosts.push({
+      name: f.name.trim(),
+      host: f.host.trim(),
+      user: f.user.trim(),
+      source: 'saved',
+    });
+    this.save();
+    this.mode = 'list';
+    this.sel = SSH_SEALED_HOSTS.length + this.userHosts.length - 1;
+    markDirty();
+    return true;
+  },
+  deleteSel() {
+    const sealedN = SSH_SEALED_HOSTS.length;
+    const idx = this.sel - sealedN;
+    if (idx < 0 || idx >= this.userHosts.length) return;
+    this.userHosts.splice(idx, 1);
+    this.save();
+    const all = this.hosts();
+    if (this.sel >= all.length) this.sel = all.length - 1;
+    markDirty();
+  },
   onKey(ch) {
-    if (this.connecting) return;
-    if (ch === KEY.UP) { this.sel = (this.sel - 1 + this.hosts.length) % this.hosts.length; markDirty(); }
-    else if (ch === KEY.DOWN) { this.sel = (this.sel + 1) % this.hosts.length; markDirty(); }
+    if (this.connecting) {
+      if (ch === '\b' || ch === KEY.ESC) { this.connecting = null; markDirty(); }
+      return;
+    }
+    if (this.mode === 'form') {
+      // navigate or type
+      if (ch === KEY.UP || ch === ';') {
+        this.formIdx = (this.formIdx - 1 + SSH_FIELDS.length) % SSH_FIELDS.length;
+        markDirty();
+      } else if (ch === KEY.DOWN || ch === '.') {
+        this.formIdx = (this.formIdx + 1) % SSH_FIELDS.length;
+        markDirty();
+      } else if (ch === '\n') {
+        if (this.formIdx < SSH_FIELDS.length - 1) {
+          this.formIdx++;
+        } else if (!this.saveForm()) {
+          // incomplete — flash by leaving as-is
+        }
+        markDirty();
+      } else if (ch === '\b') {
+        const k = SSH_FIELDS[this.formIdx].key;
+        if (this.form[k].length) this.form[k] = this.form[k].slice(0, -1);
+        else this.mode = 'list';
+        markDirty();
+      } else if (ch === KEY.ESC) {
+        this.mode = 'list'; markDirty();
+      } else if (ch >= ' ' && ch.charCodeAt(0) <= 0x7E) {
+        const k = SSH_FIELDS[this.formIdx].key;
+        this.form[k] += ch;
+        markDirty();
+      }
+      return;
+    }
+    // list mode — arrow translation by hand (we disabled keysAsArrows)
+    const hosts = this.hosts();
+    if (ch === KEY.UP || ch === ';') { this.sel = (this.sel - 1 + hosts.length) % hosts.length; markDirty(); }
+    else if (ch === KEY.DOWN || ch === '.') { this.sel = (this.sel + 1) % hosts.length; markDirty(); }
     else if (ch === '\n') {
-      const h = this.hosts[this.sel];
-      if (h.source === 'action') return;
+      const h = hosts[this.sel];
+      if (h.source === 'action') { this.enterForm(); return; }
       this.connecting = h;
       markDirty();
       setTimeout(() => {
         if (currentApp === ssh) { this.connecting = null; markDirty(); }
       }, 1800);
+    } else if (ch === 'd' || ch === 'D') {
+      // delete user-added host
+      const h = hosts[this.sel];
+      if (h && h.source === 'saved') this.deleteSel();
     }
   },
   onDraw(d) {
@@ -746,28 +1073,74 @@ const ssh = {
       d.setCursor(6, STATUSBAR_H + 80);
       d.setTextColor(COLOR.GREY);
       d.print('(simulated — no network in demo)');
+      d.fillRect(0, 124, SCREEN_W, 11, COLOR.STATUSBG);
+      d.drawFastHLine(0, 124, SCREEN_W, COLOR.DIVIDER);
+      d.setTextColor(COLOR.DIM); d.setCursor(4, 127);
+      d.print('backspace cancel  tab:home');
+      return;
+    }
+
+    if (this.mode === 'form') {
+      let y = STATUSBAR_H + 4;
+      d.setTextSize(1); d.setTextColor(COLOR.ORANGE);
+      d.setCursor(4, y); d.print('add host'); y += 14;
+      for (let i = 0; i < SSH_FIELDS.length; i++) {
+        const f = SSH_FIELDS[i];
+        const active = i === this.formIdx;
+        const val = this.form[f.key];
+        if (active) d.fillRect(0, y - 1, SCREEN_W, 14, rgb565(0x2104));
+        d.setTextColor(active ? COLOR.YELLOW : COLOR.DIM);
+        d.setCursor(6, y + 1); d.print(f.label);
+        d.setTextColor(active ? COLOR.WHITE : COLOR.GREY);
+        d.setCursor(70, y + 1);
+        let shown = val;
+        if (shown.length > 26) shown = '…' + shown.slice(-25);
+        if (!shown && !active) { d.setTextColor(COLOR.DIM); d.print(f.hint); }
+        else { d.print(shown); }
+        if (active && Math.floor(performance.now() / 500) % 2 === 0) d.print('_');
+        y += 14;
+      }
+      d.fillRect(0, 124, SCREEN_W, 11, COLOR.STATUSBG);
+      d.drawFastHLine(0, 124, SCREEN_W, COLOR.DIVIDER);
+      d.setTextColor(COLOR.DIM); d.setCursor(4, 127);
+      d.print(';. field  enter next/save  bksp cancel');
       return;
     }
 
     let y = STATUSBAR_H + 4;
     d.setTextSize(1); d.setTextColor(COLOR.DIM);
     d.setCursor(4, y); d.print('hosts'); y += 12;
-    for (let i = 0; i < this.hosts.length; i++) {
-      const h = this.hosts[i];
-      const sel = i === this.sel;
-      if (sel) d.fillRect(0, y - 1, SCREEN_W, 11, rgb565(0x2104));
+    const hosts = this.hosts();
+    const ROW_H = 11;
+    const visible = Math.floor((124 - y) / ROW_H);
+    let first = 0;
+    if (this.sel >= visible) first = this.sel - visible + 1;
+    for (let i = 0; i < visible; i++) {
+      const idx = first + i;
+      if (idx >= hosts.length) break;
+      const h = hosts[idx];
+      const sel = idx === this.sel;
+      if (sel) d.fillRect(0, y - 1, SCREEN_W, ROW_H, rgb565(0x2104));
       d.setTextColor(sel ? COLOR.WHITE : COLOR.GREY);
       d.setCursor(8, y + 1); d.print(h.name);
       if (h.source !== 'action') {
         d.setTextColor(sel ? COLOR.DIM : rgb565(0x5ACB));
-        d.setCursor(110, y + 1); d.print(`${h.user}@${h.host}`);
+        const lbl = `${h.user}@${h.host}`;
+        const x = SCREEN_W - lbl.length * 6 - 4;
+        d.setCursor(x, y + 1); d.print(lbl);
       }
-      y += 11;
+      if (h.source === 'saved' && sel) {
+        d.setTextColor(COLOR.ORANGE);
+        d.setCursor(2, y + 1); d.print('•');
+      }
+      y += ROW_H;
     }
     d.fillRect(0, 124, SCREEN_W, 11, COLOR.STATUSBG);
     d.drawFastHLine(0, 124, SCREEN_W, COLOR.DIVIDER);
     d.setTextColor(COLOR.DIM); d.setCursor(4, 127);
-    d.print(';. select  enter connect  tab:home');
+    const cur = hosts[this.sel];
+    if (cur && cur.source === 'saved') d.print(';. select  enter connect  d delete');
+    else d.print(';. select  enter connect  tab:home');
   },
 };
 registerApp(ssh);
@@ -775,35 +1148,89 @@ registerApp(ssh);
 
 // ── SETTINGS ────────────────────────────────────────────────────────────────
 
+function fmtUptime(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+
+const SESSION_START = performance.now();
+
 const settings = {
   id: 'settings', name: 'Settings', description: 'Info & actions',
   items: [],
-  sel: 1,
+  sel: store.get('settings.sel', 1),
   toast: '', toastUntil: 0,
   build() {
+    const wifi = store.get('settings.wifi', 'home-5g');
     this.items = [
       { header: true, label: 'DEVICE' },
-      { label: 'firmware sha',   value: 'd4a7c9e' },
-      { label: 'build date',     value: '2026-05-16' },
-      { label: 'uptime',         value: '00:04:21' },
+      { label: 'firmware sha',   value: 'web-demo' },
+      { label: 'build date',     value: '2026-05-18' },
+      { label: 'uptime',         dynamic: () => fmtUptime(performance.now() - SESSION_START) },
       { label: 'free heap',      value: '142 KB' },
+      { header: true, label: 'BUDDY' },
+      { label: 'approvals',      dynamic: () => String(buddy.approvals) },
+      { label: 'denials',        dynamic: () => String(buddy.denials) },
+      { label: 'tokens today',   dynamic: () => buddy.tokens.toLocaleString() },
       { header: true, label: 'NETWORK' },
-      { label: 'WiFi',           value: 'home-5g · -54 dBm' },
+      { label: 'WiFi',           dynamic: () => wifi + ' · -54 dBm' },
       { label: 'IP',             value: '10.0.0.18' },
       { label: 'mDNS',           value: 'clawdputer.local' },
+      { header: true, label: 'CHAT' },
+      { label: 'saved lines',    dynamic: () => String(chat.lines.length) },
+      { label: 'ssh hosts',      dynamic: () => String(ssh.userHosts.length) + ' user' },
       { header: true, label: 'ACTIONS' },
-      { label: 'configure WiFi', action: () => this.flashToast('WiFi app launches here') },
+      { label: 'switch WiFi',    action: () => {
+        const opts = ['home-5g', 'home-2g', 'workshop', 'mobile-hotspot'];
+        const cur = store.get('settings.wifi', 'home-5g');
+        const next = opts[(opts.indexOf(cur) + 1) % opts.length];
+        store.set('settings.wifi', next);
+        this.flashToast('WiFi → ' + next);
+        this.build();
+      }},
       { label: 'show SSH pubkey', action: () => this.flashToast('ssh-ed25519 AAA…/clawd') },
       { label: 'show seal key',  action: () => this.flashToast('SEAL_KEY=hUx2…') },
-      { label: 'check & install →', action: () => this.flashToast('reboot → recovery OTA') },
-      { label: 'clear BLE bonds', action: () => this.flashToast('BLE bonds cleared') },
-      { label: 'reboot',         action: () => this.flashToast('rebooting…') },
+      { label: 'check & install →', action: () => this.flashToast('would reboot → OTA') },
+      { label: 'clear chat',     action: () => {
+        chat.lines = DEFAULT_CHAT_LINES.slice();
+        chat.save();
+        this.flashToast('chat cleared');
+        this.build();
+      }},
+      { label: 'reset buddy stats', action: () => {
+        buddy.approvals = 0; buddy.denials = 0; buddy.tokens = 12480;
+        buddy.prompt = null;
+        buddy.save();
+        this.flashToast('buddy counters reset');
+        this.build();
+      }},
+      { label: 'reset demo memory', action: () => {
+        store.clearAll();
+        this.flashToast('memory wiped — reloading');
+        setTimeout(() => location.reload(), 800);
+      }},
     ];
   },
+  saveSel() { store.set('settings.sel', this.sel); },
   flashToast(s) { this.toast = s; this.toastUntil = performance.now() + 2200; markDirty(); },
-  onEnter() { this.build(); markDirty(); },
+  onEnter() {
+    this.build();
+    if (this.sel >= this.items.length || (this.items[this.sel] && this.items[this.sel].header)) {
+      this.sel = this.selectableNext(0, +1);
+      this.saveSel();
+    }
+    markDirty();
+  },
   onExit() {},
-  onTick() { if (this.toastUntil && performance.now() > this.toastUntil) { this.toast = ''; this.toastUntil = 0; markDirty(); } },
+  onTick() {
+    if (this.toastUntil && performance.now() > this.toastUntil) { this.toast = ''; this.toastUntil = 0; markDirty(); }
+    // dynamic values (uptime, counters) tick the canvas
+    markDirty();
+  },
   selectableNext(from, dir) {
     const n = this.items.length;
     let i = from;
@@ -814,8 +1241,8 @@ const settings = {
     return from;
   },
   onKey(ch) {
-    if (ch === KEY.UP) { this.sel = this.selectableNext(this.sel, -1); markDirty(); }
-    else if (ch === KEY.DOWN) { this.sel = this.selectableNext(this.sel, +1); markDirty(); }
+    if (ch === KEY.UP) { this.sel = this.selectableNext(this.sel, -1); this.saveSel(); markDirty(); }
+    else if (ch === KEY.DOWN) { this.sel = this.selectableNext(this.sel, +1); this.saveSel(); markDirty(); }
     else if (ch === '\n') {
       const it = this.items[this.sel];
       if (it.action) it.action();
@@ -846,10 +1273,11 @@ const settings = {
       if (sel) d.fillRect(0, y, SCREEN_W, ROW_H, rgb565(0x2104));
       d.setTextColor(sel ? COLOR.WHITE : COLOR.GREY);
       d.setCursor(8, y + 2); d.print(it.label);
-      if (it.value) {
-        const w = it.value.length * 6;
+      const val = it.dynamic ? it.dynamic() : it.value;
+      if (val) {
+        const w = val.length * 6;
         d.setTextColor(sel ? COLOR.WHITE : COLOR.DIM);
-        d.setCursor(SCREEN_W - w - 4, y + 2); d.print(it.value);
+        d.setCursor(SCREEN_W - w - 4, y + 2); d.print(val);
       } else if (it.action) {
         d.setTextColor(sel ? COLOR.YELLOW : rgb565(0x6B4D));
         d.setCursor(SCREEN_W - 12, y + 2); d.print('›');
@@ -1006,6 +1434,115 @@ document.getElementById('g0btn').addEventListener('click', () => {
   requestApp('home');
 });
 
+// ── reset-memory button (sidebar) ───────────────────────────────────────────
+
+const resetBtn = document.getElementById('reset-memory');
+if (resetBtn) {
+  resetBtn.addEventListener('click', () => {
+    store.clearAll();
+    location.reload();
+  });
+}
+
+// ── firmware-driven catalog (apps.json) ────────────────────────────────────
+
+// The hosted demo loads apps.json — generated at build time from the real
+// firmware sources in firmware/src/apps/ — and adapts to whatever apps are
+// currently shipped. Apps with a JS reimplementation pick up name /
+// description / hidden / keysAsArrows from the manifest; firmware apps
+// without a JS reimplementation get a generic stub tile so they still show
+// up in the launcher. Apps that no longer exist in firmware are dropped.
+
+function stubApp(meta) {
+  return {
+    id: meta.id,
+    name: meta.name || meta.id,
+    description: meta.description || '',
+    hidden: !!meta.hidden,
+    keysAsArrows: meta.keysAsArrows !== false,
+    isStub: true,
+    source: meta.source || '',
+    services: meta.services || [],
+    onEnter() { markDirty(); },
+    onExit() {},
+    onTick() { /* idle */ },
+    onKey() { /* no-op until reimplemented */ },
+    onDraw(d) {
+      d.fillScreen(0x0000);
+      drawStatusbar(d);
+      let y = STATUSBAR_H + 6;
+      d.setTextSize(2); d.setTextColor(COLOR.ORANGE);
+      d.setCursor(8, y); d.print(this.name);
+      y += 20;
+      d.setTextSize(1); d.setTextColor(COLOR.WHITE);
+      d.setCursor(8, y); d.print(this.description);
+      y += 14;
+      d.setTextColor(COLOR.DIM);
+      const wrap = (s, n) => {
+        const w = []; let line = ''; for (const tok of s.split(' ')) {
+          if ((line + ' ' + tok).trim().length > n) { w.push(line); line = tok; }
+          else line = (line ? line + ' ' : '') + tok;
+        } if (line) w.push(line); return w;
+      };
+      const blurb = 'runs on the real Cardputer — not yet reimplemented in the browser demo.';
+      for (const l of wrap(blurb, 36)) { d.setCursor(8, y); d.print(l); y += 10; }
+      y += 4;
+      if (this.services.length) {
+        d.setTextColor(COLOR.DIM); d.setCursor(8, y);
+        d.print('needs ' + this.services.map(s => s.replace('SVC_', '').toLowerCase()).join(' + '));
+        y += 10;
+      }
+      if (this.source) {
+        d.setTextColor(rgb565(0x6B4D)); d.setCursor(8, y); d.print(this.source);
+      }
+      d.fillRect(0, 124, SCREEN_W, 11, COLOR.STATUSBG);
+      d.drawFastHLine(0, 124, SCREEN_W, COLOR.DIVIDER);
+      d.setTextColor(COLOR.DIM); d.setCursor(4, 127);
+      d.print('tab:home');
+    },
+  };
+}
+
+function applyManifest(manifest) {
+  if (!manifest || !Array.isArray(manifest.apps)) return;
+  const byId = new Map(manifest.apps.map(a => [a.id, a]));
+
+  // Drop JS apps that no longer exist in the firmware manifest.
+  // (home is always kept — it's the launcher itself.)
+  for (let i = apps.length - 1; i >= 0; i--) {
+    const a = apps[i];
+    if (a.id === 'home') continue;
+    if (!byId.has(a.id)) apps.splice(i, 1);
+  }
+
+  // Overlay metadata onto existing JS apps; register stubs for the rest.
+  for (const m of manifest.apps) {
+    const existing = apps.find(a => a.id === m.id);
+    if (existing) {
+      if (m.name) existing.name = m.name;
+      if (m.description) existing.description = m.description;
+      if (m.hidden !== undefined) existing.hidden = !!m.hidden;
+      if (m.keysAsArrows !== undefined) existing.keysAsArrows = !!m.keysAsArrows;
+      if (m.source) existing.source = m.source;
+      if (m.services) existing.services = m.services;
+    } else {
+      registerApp(stubApp(m));
+    }
+  }
+
+  // Rebuild the launcher in case tiles changed.
+  if (typeof home.rebuild === 'function') home.rebuild();
+  markDirty();
+}
+
+async function loadManifest() {
+  try {
+    const r = await fetch('./apps.json', { cache: 'no-cache' });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
 // ── main loop ───────────────────────────────────────────────────────────────
 
 const display = new Display();
@@ -1028,3 +1565,7 @@ function frame() {
 buildKeyboard();
 requestApp('home');
 requestAnimationFrame(frame);
+
+// Auto-adapt to the live firmware catalog. Runs after the built-in apps
+// are registered so overrides + stubs land cleanly.
+loadManifest().then(applyManifest);

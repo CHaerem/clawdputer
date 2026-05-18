@@ -64,9 +64,46 @@ code {
 }
 .page-head .muted { color: var(--ink-faint); font-weight: 400; }
 .page-head .subtitle {
-  margin: 0;
+  margin: 0 0 12px;
   color: var(--ink-dim);
   max-width: 70ch;
+}
+
+.page-head .badges {
+  margin: 0;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-decoration: none;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.badge:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #fff;
+  text-decoration: none;
+}
+.badge .badge-icon { color: var(--accent); font-size: 10px; }
+.badge .badge-tag {
+  background: rgba(215, 122, 61, 0.18);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .stage {
@@ -264,6 +301,23 @@ code {
 .card.subtle p { margin: 0; }
 
 .apps-list strong { color: var(--ink); }
+
+.reset-btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+.reset-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: #fff;
+}
 
 .page-foot {
   max-width: 1280px;

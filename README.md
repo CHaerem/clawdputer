@@ -6,6 +6,17 @@ status (buddy), active remote (chat over the bridge), live usage
 metrics, an SSH client with sealed host presets, OTA + GitOps
 self-updates, and more — all on a 240×135 IPS display.
 
+## Try it in your browser
+
+**[chaerem.github.io/clawdputer](https://chaerem.github.io/clawdputer/)** —
+a JavaScript simulator of the device with the real 240×135 pixel buffer,
+the on-screen keyboard wired to your physical keys, and all of the apps
+running. The simulated `claude` CLI answers any prompt you type, and
+everything you do — chat history, SSH hosts you add, Buddy approve/deny
+counts, your last-selected card — persists in your browser's
+`localStorage` and survives a page reload. Wipe state any time from
+*Settings → reset demo memory*. No backend, no account, no install.
+
 ## What it is, in one paragraph
 
 The Cardputer pairs with your Mac over BLE. Claude Desktop talks the

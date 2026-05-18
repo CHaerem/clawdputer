@@ -5,13 +5,13 @@ on:
     branches: [main]
     paths:
       - "web/**"
+      - "firmware/src/apps/**"
+      - "tools/gen-web-manifest.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -20,20 +20,19 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: Generate firmware app manifest
+        run: python3 tools/gen-web-manifest.py
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Deploy to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: web
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./web
+          publish_branch: gh-pages
+          # Keep pr-preview/ subdirectories created by pr-preview.yml so
+          # they survive main deploys.
+          keep_files: true
+          commit_message: "deploy: ${{ github.event.head_commit.message }}"
