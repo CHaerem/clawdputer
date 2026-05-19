@@ -15,7 +15,11 @@
 set -euo pipefail
 
 REPO="CHaerem/clawdputer"
-BINARY_URL="https://github.com/${REPO}/releases/latest/download/clawd-bridge"
+# bridge-latest tag is published by .github/workflows/host.yml on every
+# main push that touches host/**. Lives separately from the firmware
+# OTA's `latest` tag so the two workflows don't race over the same
+# release metadata.
+BINARY_URL="https://github.com/${REPO}/releases/download/bridge-latest/clawd-bridge"
 LABEL="com.clawdputer.bridge"
 INSTALL_DIR="$HOME/Library/Application Support/clawd-bridge"
 BIN_PATH="$INSTALL_DIR/clawd-bridge"

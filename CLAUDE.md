@@ -324,13 +324,14 @@ metadata.
 
 The hosted demo's "Open in Wokwi" badge points at
 `https://wokwi.com/github/CHaerem/clawdputer/tree/wokwi-firmware`. The
-orphan `wokwi-firmware` branch is force-pushed by
-`.github/workflows/wokwi-publish.yml` on every main firmware build and
-contains: `firmware/firmware.bin`, `firmware/firmware.elf`,
-`firmware/wokwi.toml` (pointing at the committed binary, not the
-gitignored `.pio` path), `firmware/diagram.json`, and the
-`cardputer-keyboard` custom chip. Wokwi clones the branch, finds
-everything relative to `wokwi.toml`, and boots the actual firmware.
+orphan `wokwi-firmware` branch is force-pushed by the build job in
+`.github/workflows/firmware.yml` on every main firmware build and
+contains: `firmware/wokwi.bin` (merged bootloader + partition table +
+ota_data + app, built from the cardputer-wokwi PIO env),
+`firmware/firmware.elf`, `firmware/wokwi.toml`, `firmware/diagram.json`,
+and the compiled `cardputer-keyboard` custom chip wasm. Wokwi clones
+the branch, finds everything relative to `wokwi.toml`, and boots the
+firmware.
 
 **Verified pinout** (from M5GFX + M5Cardputer/IOMatrix.cpp):
 
@@ -349,15 +350,21 @@ everything relative to `wokwi.toml`, and boots the actual firmware.
 | External I2C SDA/SCL | 1 / 2 |
 | microSD CS/SCLK/MISO/MOSI | 40 / 14 / 39 / 12 |
 
-`diagram.json` wires the StampS3 to a 240×135 ST7789, a G0 push button,
-and the custom `chip-cardputer-keyboard` (sources under
-`firmware/wokwi-chips/cardputer-keyboard/`). The chip's `chip.c` is
-compiled to `chip.wasm` by `wokwi/builder-clang-wasm` (see the
-`Compile cardputer-keyboard custom chip` step in `wokwi.yml`,
-`wokwi-publish.yml`, and `wokwi-pr-publish.yml`); `wokwi.toml`'s
-`[[chip]] binary = "wokwi-chips/cardputer-keyboard/chip.wasm"` references
-the build output. Locally: `cd firmware/wokwi-chips/cardputer-keyboard
-&& make` (requires Docker). The .wasm is gitignored.
+`diagram.json` wires a minimal stand-in for the Cardputer: a custom
+`chip-cardputer-keyboard` for the matrix scan plus a G0 push button.
+The ST7789 is NOT wired — Wokwi has no StampS3 board, only the
+WROOM-1-based DevKitC-1 which hides GPIO 33/34 (the display RST/DC
+pins on real Cardputer) as internal flash pins. The firmware still
+drives those GPIOs on boot; they just no-op in the simulator. GPIO 45
+and 48 are grounded to break M5Unified's PowerHub I2C autodetect that
+would otherwise misidentify the board.
+
+The chip's `chip.c` is compiled to `chip.wasm` by
+`wokwi/builder-clang-wasm` (see the `Compile cardputer-keyboard
+custom chip` step in `.github/workflows/firmware.yml`); `wokwi.toml`'s
+`[[chip]] binary = "wokwi-chips/cardputer-keyboard/chip.wasm"`
+references the build output. Locally: `cd firmware/wokwi-chips/
+cardputer-keyboard && make` (requires Docker). The .wasm is gitignored.
 
 Today the chip is a **boot-only stub** that declares the 10 keyboard
 pins and never pulls a row low — the firmware sees "no keys pressed,"
@@ -374,42 +381,35 @@ diagram — the latter is the cleaner long-term option but hasn't been
 built yet.
 
 **Variant detection.** M5Unified probes GPIO 5/6/8/9 to pick between
-`board_M5Cardputer` and `board_M5CardputerADV`. With only the keyboard
-chip attached and no I2C pull-ups on 8/9, the firmware detects this as
-non-ADV Cardputer and initialises accordingly. The codebase compiles
-against the StampS3 generic and works on either physical variant.
+`board_M5Cardputer` and `board_M5CardputerADV`. In the simulator the
+ST7789 panel-ID read returns 0 (the panel isn't wired) so autodetect
+falls back to PowerHub via I2C 0x50 on GPIO 45/48 — we ground those
+pins in `diagram.json` and set `cfg.fallback_board =
+board_M5Cardputer` in `main.cpp` so M5Cardputer init still runs.
 
-**Untested**. None of this has been verified against a live Wokwi
-simulation from this sandbox — Wokwi.com isn't reachable from CI/dev
-shells, and the custom chip C code can only be compiled by Wokwi's own
-toolchain at simulation start. Expect to iterate after the first real
-boot:
-- If `M5Cardputer.begin()` still hangs, the most likely culprits are
-  (a) ST7789 panel id mismatch in M5GFX's autodetect path, (b) a
-  missing pull-up on the keyboard inputs that the firmware relies on
-  but the custom chip doesn't replicate, or (c) the StampS3 board part
-  not exposing GPIO 11 / 33–38 in the Wokwi diagram.
-- The `wokwi.toml` `[[chip]]` syntax is best-effort — if Wokwi expects
-  a different schema, the chip won't load and the keyboard will appear
-  dead. Falling back to `wokwi-cli`'s `--custom-chip` flag locally is
-  the fastest way to diagnose.
+**Two PIO envs.** `cardputer` is the real-hardware build (used by
+firmware.yml for OTA releases). `cardputer-wokwi` adds
+`-DCLAWD_WOKWI_BUILD=1` which trips an `#ifdef` in `main.cpp::setup()`
+turning off `internal_imu`, `internal_rtc`, `internal_mic`,
+`internal_spk`, `clear_display`, `output_power` — peripherals that
+hang on I2C/I2S transfers Wokwi doesn't ACK. Real-hardware firmware
+keeps the defaults (all on).
 
-**Per-PR firmware previews.** `.github/workflows/wokwi-pr-publish.yml`
-builds firmware for any PR touching `firmware/**` and force-pushes it
-to a `wokwi-firmware-pr-<N>` orphan branch. A sticky comment on the
-PR links to
+**Per-PR firmware previews.** `firmware.yml` builds the simulator
+firmware for any PR touching `firmware/**`, force-pushes it to a
+`wokwi-firmware-pr-<N>` orphan branch, and posts a sticky comment on
+the PR linking to
 `https://wokwi.com/github/<owner>/<repo>/tree/wokwi-firmware-pr-<N>`
 so reviewers can boot that PR's exact firmware in the browser. The
-branch is deleted on PR close/merge. The hosted badge in `web/index.html`
-still points at main's `wokwi-firmware` branch — PR previews are
-discovered via the PR comment, not the static demo.
+branch is deleted on PR close/merge. The hosted badge in
+`web/index.html` still points at main's `wokwi-firmware` branch — PR
+previews are discovered via the PR comment, not the static demo.
 
-**Smoke test as regression net.** `.github/workflows/wokwi.yml` now
-runs on every push to main and on firmware-touching PRs (still
-`continue-on-error: true` until the Wokwi-vs-real-hardware delta is
-audited end-to-end). It boots the same firmware bundle that the
-public embed loads, so a Wokwi-side regression shows up in CI before
-users click through.
+**Smoke test as regression net.** Same workflow runs `wokwi-cli`
+against the merged image on every firmware-touching PR
+(`continue-on-error: true` — the smoke step's result is surfaced in
+the sticky PR comment rather than gating merge). The outcome appears
+in `steps.smoke.outcome` and is shown in the comment.
 
 ## Keeping docs in sync
 

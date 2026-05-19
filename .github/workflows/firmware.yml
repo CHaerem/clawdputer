@@ -1,30 +1,83 @@
 name: firmware
 
+# Single workflow that handles every firmware-touching path:
+#
+#   push to main + firmware/**
+#     → build cardputer (real fw)
+#     → build cardputer-wokwi (simulator fw)
+#     → publish firmware.bin + version.txt to GH Release `latest` (OTA)
+#     → force-push merged image + chip wasm to wokwi-firmware orphan
+#       branch (Open-in-Wokwi badge on the demo)
+#
+#   pull_request firmware/**
+#     opened / reopened / synchronize:
+#       → build both envs
+#       → run wokwi-cli smoke against the cardputer-wokwi image
+#       → force-push to wokwi-firmware-pr-<N> orphan branch
+#       → sticky PR comment with the wokwi.com embed URL
+#     closed (merge or reject):
+#       → delete the wokwi-firmware-pr-<N> branch
+#
+# Consolidates the previous firmware.yml + wokwi.yml + wokwi-publish.yml
+# + wokwi-pr-publish.yml into one. Steps that don't apply to the current
+# event are skipped via `if:` — every job runs in a single ~3-min build.
+
 on:
   push:
     branches: [main]
     paths:
       - "firmware/**"
       - ".github/workflows/firmware.yml"
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 concurrency:
-  group: firmware-${{ github.ref }}
-  cancel-in-progress: false
+  group: firmware-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PR_BRANCH: wokwi-firmware-pr-${{ github.event.pull_request.number }}
 
 jobs:
-  build:
+  cleanup-pr-branch:
+    # Runs first and alone when a PR closes — no build needed, just
+    # delete the orphan branch so refs stay tidy.
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # embed_version.py needs git history
+      - name: Delete wokwi-firmware preview branch
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --heads \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$PR_BRANCH" >/dev/null 2>&1 && \
+            git push \
+              "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              --delete "$PR_BRANCH" || \
+            echo "no preview branch to delete"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+  build:
+    if: github.event.action != 'closed' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # embed_version.py needs git history; PRs need head.sha so the
+          # build SHA in firmware.bin matches the PR commit.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -41,16 +94,66 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
-      - name: Build firmware
+      - name: Build cardputer (real-hardware firmware)
         working-directory: firmware
         run: pio run -e cardputer
 
-      - name: Size guard
-        # Fail the build (so we never publish a release) if the binary
-        # outgrew its OTA partition headroom. partitions:
-        # default_8MB.csv reserves 3 342 336 bytes per app slot; we cap
-        # at 80 % of that so OTA always has room to write the new image
-        # before swapping.
+      - name: Build cardputer-wokwi (simulator firmware)
+        working-directory: firmware
+        run: pio run -e cardputer-wokwi
+
+      - name: Install esptool
+        run: pip install --quiet esptool
+
+      - name: Merge flash image for Wokwi
+        working-directory: firmware/.pio/build/cardputer-wokwi
+        run: |
+          python -m esptool --chip esp32s3 merge_bin \
+            -o wokwi.bin \
+            --flash_mode dio --flash_size 8MB --flash_freq 80m \
+            0x0     bootloader.bin \
+            0x8000  partitions.bin \
+            0xe000  ota_data_initial.bin \
+            0x10000 firmware.bin
+
+      - name: Compile cardputer-keyboard custom chip
+        working-directory: firmware/wokwi-chips/cardputer-keyboard
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/work -w /work wokwi/builder-clang-wasm \
+            clang --target=wasm32-unknown-wasi --sysroot /opt/wasi-libc \
+              -nostartfiles -Wl,--export-table -Wl,--no-entry -Werror \
+              -o chip.wasm chip.c
+          test -s chip.wasm
+
+      # ── PR-only: Wokwi smoke test ────────────────────────────────────
+      - name: Run Wokwi boot smoke test
+        if: github.event_name == 'pull_request'
+        id: smoke
+        continue-on-error: true
+        uses: wokwi/wokwi-ci-action@v1
+        with:
+          token: ${{ secrets.WOKWI_CLI_TOKEN }}
+          path: firmware
+          timeout: 60000
+          scenario: test.scenario.yaml
+          serial_log_file: wokwi-serial.log
+          fail_text: "Guru Meditation"
+
+      - name: Upload serial log
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wokwi-serial-log
+          path: |
+            wokwi-serial.log
+            firmware/wokwi-serial.log
+          if-no-files-found: ignore
+
+      # ── main-only: OTA release + wokwi-firmware orphan branch ────────
+      - name: Size guard (OTA partition headroom)
+        if: github.event_name == 'push'
+        # default_8MB.csv reserves 3 342 336 bytes per app slot; cap at
+        # 80% so OTA has room to write the new image before swapping.
         run: |
           SIZE=$(stat -c%s firmware/.pio/build/cardputer/firmware.bin)
           MAX=2670000
@@ -60,7 +163,8 @@ jobs:
               exit 1
           fi
 
-      - name: Stage release artifacts
+      - name: Stage OTA release artifacts
+        if: github.event_name == 'push'
         id: stage
         run: |
           SHA=$(git rev-parse --short=7 HEAD)
@@ -71,18 +175,113 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           ls -lh out
 
-      - name: Publish "latest" release
+      - name: Publish "latest" release (OTA)
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Latest build (${{ steps.stage.outputs.sha }})"
+          name: "Latest firmware (${{ steps.stage.outputs.sha }})"
           body: |
             Auto-built from commit ${{ github.sha }}.
 
             The Cardputer self-update service polls this release every
-            five minutes and applies new firmware automatically.
+            5 minutes and applies new firmware automatically (see
+            firmware/src/services/updater.cpp).
+
+            Mac bridge binary is published separately under the
+            `bridge-latest` tag — `host/install/online.sh` knows to
+            fetch from there.
           files: |
             out/firmware.bin
             out/version.txt
           fail_on_unmatched_files: true
           make_latest: "true"
+
+      # ── both events: stage Wokwi bundle ──────────────────────────────
+      - name: Stage Wokwi bundle
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/wokwi-bundle
+          mkdir -p /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard
+          cp firmware/.pio/build/cardputer-wokwi/wokwi.bin     /tmp/wokwi-bundle/firmware/wokwi.bin
+          cp firmware/.pio/build/cardputer-wokwi/firmware.elf  /tmp/wokwi-bundle/firmware/firmware.elf
+          cp firmware/diagram.json                             /tmp/wokwi-bundle/firmware/diagram.json
+          cp firmware/wokwi-chips/cardputer-keyboard/chip.wasm /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.wasm
+          cp firmware/wokwi-chips/cardputer-keyboard/chip.json /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.json
+          cat > /tmp/wokwi-bundle/firmware/wokwi.toml <<'TOML'
+          [wokwi]
+          version = 1
+          firmware = 'wokwi.bin'
+          elf      = 'firmware.elf'
+
+          [[chip]]
+          name   = "cardputer-keyboard"
+          binary = "wokwi-chips/cardputer-keyboard/chip.wasm"
+          TOML
+
+      - name: Force-push wokwi-firmware orphan branch (main)
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          cat > /tmp/wokwi-bundle/README.md <<MD
+          # wokwi-firmware
+
+          Auto-generated orphan branch. Force-pushed by the build job in
+          \`.github/workflows/firmware.yml\` on every main push. Carries
+          firmware/wokwi.bin (merged bootloader + partitions + app, built
+          from the cardputer-wokwi PIO env which disables peripherals the
+          simulator can't ACK) plus the compiled keyboard chip wasm and a
+          wokwi.toml that ties them together. The "Open in Wokwi" badge
+          on the web demo points here.
+          MD
+          cd /tmp/wokwi-bundle
+          git init -q
+          git checkout --orphan wokwi-firmware
+          git config user.name  "clawdputer-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git commit -q -m "wokwi-firmware: $(date -u +%Y-%m-%dT%H:%M:%SZ) from ${GITHUB_SHA::7}"
+          git push --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            wokwi-firmware
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Force-push wokwi-firmware PR preview branch
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          cat > /tmp/wokwi-bundle/README.md <<MD
+          # ${PR_BRANCH}
+
+          Auto-generated orphan branch for PR #${{ github.event.pull_request.number }}.
+          Force-pushed by \`.github/workflows/firmware.yml\` on every push
+          to the PR. Deleted on close/merge. The PR's sticky comment
+          links to the wokwi.com embed for this branch.
+          MD
+          cd /tmp/wokwi-bundle
+          git init -q
+          git checkout --orphan "$PR_BRANCH"
+          git config user.name  "clawdputer-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git commit -q -m "wokwi-firmware: PR #${{ github.event.pull_request.number }} @ ${GITHUB_SHA::7}"
+          git push --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$PR_BRANCH"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sticky Wokwi link comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: wokwi-firmware-preview
+          message: |
+            🔌 **Wokwi firmware preview** — boot this PR's firmware in the browser:
+
+            👉 https://wokwi.com/github/${{ github.repository }}/tree/${{ env.PR_BRANCH }}
+
+            Rebuilt on every push. Smoke-test result: ${{ steps.smoke.outcome }}.
+
+            <sub>The `${{ env.PR_BRANCH }}` orphan branch is deleted automatically on close/merge.</sub>

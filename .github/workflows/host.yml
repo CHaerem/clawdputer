@@ -48,11 +48,16 @@ jobs:
           file out/clawd-bridge
           ls -lh out
 
-      - name: Publish "latest" release
+      - name: Publish "bridge-latest" release
+        # Separate tag from the firmware OTA's `latest` release — both
+        # workflows used to publish to `latest` and stomp each other's
+        # name/body and move the tag around. host/install/online.sh
+        # fetches from bridge-latest; deployed Cardputers fetch firmware
+        # from latest. No more race.
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "Latest build (${{ steps.stage.outputs.sha }})"
+          tag_name: bridge-latest
+          name: "Bridge ${{ steps.stage.outputs.sha }}"
           body: |
             Auto-built from commit ${{ github.sha }}.
 
@@ -64,4 +69,4 @@ jobs:
             out/clawd-bridge
             out/clawd-bridge.sha256
           fail_on_unmatched_files: true
-          make_latest: "true"
+          make_latest: "false"
