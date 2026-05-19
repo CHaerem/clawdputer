@@ -1,0 +1,8 @@
+[wokwi]
+version = 1
+firmware = 'wokwi.bin'
+elf      = 'firmware.elf'
+
+[[chip]]
+name   = "cardputer-keyboard"
+binary = "wokwi-chips/cardputer-keyboard/chip.wasm"

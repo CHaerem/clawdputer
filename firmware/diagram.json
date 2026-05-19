@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "author": "clawdputer",
+  "editor": "wokwi",
+  "_": "Wokwi simulation of the M5Stack Cardputer (non-ADV). Pin coverage is partial: Wokwi has no StampS3 part, so we use board-esp32-s3-devkitc-1 (WROOM-1-based) which doesn't expose GPIO 33/34/etc — those are internal flash pins on the WROOM-1 module. On the real StampS3 they're freed for the ST7789's RES/DC, but here we can only wire MOSI/SCK/CS/BL (35/36/37/38) — and even those don't connect to anything because the ST7789 needs all six lines, so we drop the display part entirely. The firmware still drives those GPIOs on boot; they just no-op. Keyboard matrix (cols 8/9/11, rows 13/15/3/4/5/6/7) is fully wired to the custom cardputer-keyboard chip. GPIO 45 + 48 are grounded to break M5Unified's PowerHub I2C autodetect that would otherwise misidentify the board — combined with cfg.fallback_board = board_M5Cardputer in firmware/src/main.cpp the boot reaches the launcher with the right board type.",
+  "parts": [
+    { "type": "wokwi-text", "id": "lbl-title", "top": -200, "left": -180, "attrs": { "text": "clawdputer · M5Stack Cardputer (simulated)", "fontSize": "18", "color": "#ffae42" } },
+    { "type": "wokwi-text", "id": "lbl-sub",   "top": -175, "left": -180, "attrs": { "text": "Real firmware boots in Wokwi. Display panel is omitted (GPIO 33/34 aren't on the WROOM-1-based dev board), but the launcher and keyboard scan run.", "fontSize": "10", "color": "#aaaaaa" } },
+
+    { "type": "chip-cardputer-keyboard", "id": "kb", "top": 60, "left": -60, "attrs": {} },
+
+    { "type": "wokwi-pushbutton", "id": "btn-g0", "top": -150, "left": -190, "attrs": { "color": "white", "label": "G0" } },
+
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": -40, "left": 360, "attrs": { "flashSize": "8", "psramSize": "8", "fullBoot": "1" } }
+  ],
+  "connections": [
+    [ "esp:TX",  "$serialMonitor:RX", "",       [] ],
+    [ "esp:RX",  "$serialMonitor:TX", "",       [] ],
+
+    [ "esp:GND.1", "kb:GND",   "black", [] ],
+    [ "esp:3V3.1", "kb:VCC",   "red",   [] ],
+    [ "esp:8",     "kb:COL_A", "blue",  [] ],
+    [ "esp:9",     "kb:COL_B", "blue",  [] ],
+    [ "esp:11",    "kb:COL_C", "blue",  [] ],
+    [ "esp:13",    "kb:ROW0",  "purple",[] ],
+    [ "esp:15",    "kb:ROW1",  "purple",[] ],
+    [ "esp:3",     "kb:ROW2",  "purple",[] ],
+    [ "esp:4",     "kb:ROW3",  "purple",[] ],
+    [ "esp:5",     "kb:ROW4",  "purple",[] ],
+    [ "esp:6",     "kb:ROW5",  "purple",[] ],
+    [ "esp:7",     "kb:ROW6",  "purple",[] ],
+
+    [ "btn-g0:1.l", "esp:0",   "green", [] ],
+    [ "btn-g0:2.l", "esp:GND.2","black",[] ],
+
+    [ "esp:45", "esp:GND.3", "black", [] ],
+    [ "esp:48", "esp:GND.4", "black", [] ]
+  ],
+  "dependencies": {}
+}
