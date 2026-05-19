@@ -206,8 +206,16 @@ bool fetchManifest(WiFiClientSecure& client,
 const char* g_progressPhase = "downloading…";
 
 void onFlashProgress(int cur, int total) {
-    if (total <= 0) return;
     static int lastPct = -1;
+    if (total <= 0) {
+        // Content-Length missing (chunked transfer through the GitHub
+        // redirect). Show an indeterminate bar with the byte count so
+        // the user knows we haven't hung.
+        char buf[40];
+        snprintf(buf, sizeof(buf), "%s %dKB", g_progressPhase, cur / 1024);
+        drawInstall(buf, -1);
+        return;
+    }
     int pct = (int)((int64_t)cur * 100 / total);
     if (pct == lastPct) return;
     lastPct = pct;
@@ -270,6 +278,8 @@ bool runBackgroundCheck() {
                   (unsigned)ESP.getFreeHeap(), (unsigned)largest);
     WiFiClientSecure client;
     client.setInsecure();
+    client.setHandshakeTimeout(15);
+    client.setTimeout(15000);
     std::string latest, builtAt;
     bool ok = fetchManifest(client, latest, builtAt);
     if (ok) {
@@ -433,6 +443,14 @@ void installNow() {
     drawInstall("checking manifest…", -1);
     WiFiClientSecure client;
     client.setInsecure();
+    // Bound the TLS handshake + socket waits so a stalled connection
+    // surfaces as an error instead of hanging the UI forever (the
+    // "download never finishes" symptom — github.com → releases.github
+    // usercontent.com is a fresh handshake on a different host, and
+    // without these the second handshake can sit waiting for bytes
+    // that never arrive).
+    client.setHandshakeTimeout(15);   // seconds
+    client.setTimeout(15000);          // ms — socket read/connect
 
     std::string latest, builtAt;
     if (!fetchManifest(client, latest, builtAt)) {
@@ -471,10 +489,21 @@ void installNow() {
 
     markFlashPending(latest);
 
+    // Fresh client for the firmware stream. The manifest fetch above
+    // already consumed `client` for a github.com handshake; reusing it
+    // for the redirect-followed releases.githubusercontent.com stream
+    // left residual TLS state that could deadlock the second handshake
+    // on this hardware (~31 KB largest free block, fragmented). A fresh
+    // WiFiClientSecure starts clean and inherits the same timeouts.
+    WiFiClientSecure dlClient;
+    dlClient.setInsecure();
+    dlClient.setHandshakeTimeout(15);
+    dlClient.setTimeout(15000);
+
     httpUpdate.rebootOnUpdate(true);
     httpUpdate.onProgress(onFlashProgress);
     httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    auto ret = httpUpdate.update(client, FIRMWARE_URL);
+    auto ret = httpUpdate.update(dlClient, FIRMWARE_URL);
     // Success reboots inside httpUpdate.update(). Anything below is failure.
     (void)ret;
 
