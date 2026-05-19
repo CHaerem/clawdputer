@@ -197,6 +197,11 @@ void readTilt() {
 
 void onEnter() {
     loadPrefs();
+    // If the stored pref is Tilt but the build / hardware has no IMU
+    // (e.g. CLAWD_WOKWI_BUILD disables it), fall back to keys so the
+    // game is playable without the user having to discover the G toggle.
+    if (g_control == Control::Tilt && !M5.Imu.isEnabled())
+        g_control = Control::Keys;
     applyOrientation();
     g_state = State::Start;
     g_dirty = true;
