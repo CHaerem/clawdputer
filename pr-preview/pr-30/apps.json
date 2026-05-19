@@ -1,0 +1,135 @@
+{
+  "generated_at": "2026-05-19T08:43:27+00:00",
+  "sha": "3d521bb",
+  "apps": [
+    {
+      "id": "battery",
+      "name": "Battery",
+      "description": "Live + 1h graph",
+      "hidden": true,
+      "services": [
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/battery/battery.cpp"
+    },
+    {
+      "id": "buddy",
+      "name": "Buddy",
+      "description": "Claude Desktop companion",
+      "services": [
+        "SVC_BLE"
+      ],
+      "source": "firmware/src/apps/buddy/buddy.cpp"
+    },
+    {
+      "id": "chat",
+      "name": "Chat",
+      "description": "Claude CLI remote",
+      "keysAsArrows": false,
+      "services": [
+        "SVC_WIFI",
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/chat/chat.cpp"
+    },
+    {
+      "id": "home",
+      "name": "Home",
+      "description": "Launcher",
+      "services": [
+        "SVC_WIFI",
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/home/home.cpp"
+    },
+    {
+      "id": "report",
+      "name": "Report",
+      "description": "File an issue",
+      "keysAsArrows": false,
+      "hidden": true,
+      "services": [
+        "SVC_WIFI",
+        "SVC_SD",
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/report/report.cpp"
+    },
+    {
+      "id": "settings",
+      "name": "Settings",
+      "description": "Info & actions",
+      "services": [
+        "SVC_WIFI",
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/settings/settings.cpp"
+    },
+    {
+      "id": "snake",
+      "name": "Snake",
+      "description": "Eat dots, tilt or type",
+      "keysAsArrows": true,
+      "hidden": false,
+      "services": [
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/snake/snake.cpp"
+    },
+    {
+      "id": "ssh",
+      "name": "SSH",
+      "description": "Key-auth SSH client",
+      "keysAsArrows": true,
+      "services": [
+        "SVC_WIFI"
+      ],
+      "source": "firmware/src/apps/ssh/ssh.cpp"
+    },
+    {
+      "id": "sysinfo",
+      "name": "Sysinfo",
+      "description": "Battery & network",
+      "hidden": true,
+      "services": [
+        "SVC_WIFI",
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/sysinfo/sysinfo.cpp"
+    },
+    {
+      "id": "tetris",
+      "name": "Tetris",
+      "description": "Stack 'em, clear 'em",
+      "keysAsArrows": true,
+      "hidden": false,
+      "services": [
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/tetris/tetris.cpp"
+    },
+    {
+      "id": "usage",
+      "name": "Usage",
+      "description": "Claude activity",
+      "hidden": true,
+      "services": [
+        "SVC_WIFI",
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/usage/usage.cpp"
+    },
+    {
+      "id": "wifi",
+      "name": "WiFi",
+      "description": "Scan & connect",
+      "keysAsArrows": false,
+      "hidden": true,
+      "services": [
+        "SVC_WIFI",
+        "SVC_CANVAS"
+      ],
+      "source": "firmware/src/apps/wifi/wifi.cpp"
+    }
+  ]
+}
