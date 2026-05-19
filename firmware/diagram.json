@@ -2,15 +2,18 @@
   "version": 1,
   "author": "clawdputer",
   "editor": "wokwi",
-  "_": "Wokwi simulation of the M5Stack Cardputer (non-ADV). Pinout matches M5GFX/M5Unified source: display pins from M5GFX::_panel_last (ST7789 init), keyboard matrix from M5Cardputer's IOMatrixKeyboardReader (output={8,9,11}, input={13,15,3,4,5,6,7}). M5Unified autodetects which Cardputer variant is connected by probing GPIO 5/6/8/9 — with only the keyboard chip attached (no I2C pullups on 8/9) the firmware will detect this as board_M5Cardputer.",
+  "_": "Wokwi simulation of the M5Stack Cardputer (non-ADV). Pinout matches M5GFX/M5Unified source: display pins from M5GFX::_panel_last (ST7789 init), keyboard matrix from M5Cardputer's IOMatrixKeyboardReader (output={8,9,11}, input={13,15,3,4,5,6,7}). M5Unified autodetects which Cardputer variant is connected by probing GPIO 5/6/8/9 — with only the keyboard chip attached (no I2C pullups on 8/9) the firmware will detect this as board_M5Cardputer. Visual layout below puts the ST7789 above the keyboard chip to mimic the physical Cardputer; the ESP32-S3 dev board sits off to the right since it stands in for the real StampS3 module hidden inside the case.",
   "parts": [
-    { "type": "board-esp32-s3-devkit-c-1", "id": "esp", "top": 0, "left": 0, "attrs": { "flashSize": "8", "psramSize": "8" } },
+    { "type": "wokwi-text", "id": "lbl-title", "top": -260, "left": -160, "attrs": { "text": "clawdputer · M5Stack Cardputer (simulated)", "fontSize": "18", "color": "#ffae42" } },
+    { "type": "wokwi-text", "id": "lbl-sub",   "top": -235, "left": -160, "attrs": { "text": "Firmware boots in Wokwi with the real Cardputer pinout. Type on the keyboard chip's \"keys\" attribute (x,y pairs) to drive input.", "fontSize": "10", "color": "#aaaaaa" } },
 
-    { "type": "board-st7789-240x135", "id": "lcd", "top": -150, "left": 200, "rotate": 0, "attrs": {} },
+    { "type": "board-st7789-240x135", "id": "lcd", "top": -210, "left": -40, "rotate": 0, "attrs": {} },
 
-    { "type": "chip-cardputer-keyboard", "id": "kb", "top": 200, "left": 100, "attrs": {} },
+    { "type": "chip-cardputer-keyboard", "id": "kb", "top": 60, "left": -60, "attrs": {} },
 
-    { "type": "wokwi-pushbutton", "id": "btn-g0", "top": 100, "left": -120, "attrs": { "color": "white", "label": "G0" } }
+    { "type": "wokwi-pushbutton", "id": "btn-g0", "top": -180, "left": -190, "attrs": { "color": "white", "label": "G0" } },
+
+    { "type": "board-esp32-s3-devkit-c-1", "id": "esp", "top": -40, "left": 360, "attrs": { "flashSize": "8", "psramSize": "8" } }
   ],
   "connections": [
     [ "esp:TX",  "$serialMonitor:RX", "",       [] ],

@@ -379,11 +379,22 @@ boot:
   dead. Falling back to `wokwi-cli`'s `--custom-chip` flag locally is
   the fastest way to diagnose.
 
-**Per-PR firmware previews.** Not wired up yet. Today the badge always
-points at main's firmware via the `wokwi-firmware` branch. If
-firmware-changing PRs become common, extend `wokwi-publish.yml` to
-also force-push to `wokwi-firmware/pr-<N>` branches on PR events and
-override the badge URL in `pr-preview.yml`'s sticky comment.
+**Per-PR firmware previews.** `.github/workflows/wokwi-pr-publish.yml`
+builds firmware for any PR touching `firmware/**` and force-pushes it
+to a `wokwi-firmware-pr-<N>` orphan branch. A sticky comment on the
+PR links to
+`https://wokwi.com/github/<owner>/<repo>/tree/wokwi-firmware-pr-<N>`
+so reviewers can boot that PR's exact firmware in the browser. The
+branch is deleted on PR close/merge. The hosted badge in `web/index.html`
+still points at main's `wokwi-firmware` branch — PR previews are
+discovered via the PR comment, not the static demo.
+
+**Smoke test as regression net.** `.github/workflows/wokwi.yml` now
+runs on every push to main and on firmware-touching PRs (still
+`continue-on-error: true` until the Wokwi-vs-real-hardware delta is
+audited end-to-end). It boots the same firmware bundle that the
+public embed loads, so a Wokwi-side regression shows up in CI before
+users click through.
 
 ## Keeping docs in sync
 
