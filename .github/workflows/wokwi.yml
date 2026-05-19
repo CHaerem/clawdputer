@@ -77,11 +77,20 @@ jobs:
           serial_log_file: wokwi-serial.log
           fail_text: "Guru Meditation"
 
+      - name: Locate serial log
+        if: always()
+        run: |
+          echo "---candidate paths---"
+          find . -maxdepth 4 -name "wokwi-serial.log" -print 2>/dev/null || true
+
       - name: Upload serial log
         # Always upload — continue-on-error above masks smoke failures
         # from the job, so a plain `if: failure()` would never fire.
-        if: always() && hashFiles('firmware/wokwi-serial.log') != ''
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: wokwi-serial-log
-          path: firmware/wokwi-serial.log
+          path: |
+            wokwi-serial.log
+            firmware/wokwi-serial.log
+          if-no-files-found: ignore
