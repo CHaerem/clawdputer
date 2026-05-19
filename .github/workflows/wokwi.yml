@@ -54,6 +54,7 @@ jobs:
       - name: Merge flash image for Wokwi
         working-directory: firmware/.pio/build/cardputer
         run: |
+          pip install --quiet esptool
           python -m esptool --chip esp32s3 merge_bin \
             -o wokwi.bin \
             --flash_mode dio --flash_size 8MB --flash_freq 80m \
