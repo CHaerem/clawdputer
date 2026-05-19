@@ -167,13 +167,41 @@ jobs:
         if: github.event_name == 'push'
         id: stage
         run: |
+          set -euo pipefail
           SHA=$(git rev-parse --short=7 HEAD)
           DATE=$(git show -s --format=%cI HEAD | cut -c1-10)
+          NOTES=$(git show -s --format=%s HEAD | tr -d '"' | cut -c1-120)
           mkdir -p out
           cp firmware/.pio/build/cardputer/firmware.bin out/firmware.bin
+          # Legacy two-line manifest. Devices flashed before the
+          # manifest.json era still poll this; can be retired once every
+          # deployed device has rolled through the new updater (which
+          # prefers manifest.json and treats version.txt as fallback).
           printf '%s\n%s\n' "$SHA" "$DATE" > out/version.txt
+          # New JSON manifest — single atomic source of truth. Includes
+          # SHA256 so the device can verify the downloaded image before
+          # committing, and size so it can preflight the partition.
+          SIZE=$(stat -c%s out/firmware.bin)
+          SHA256=$(sha256sum out/firmware.bin | awk '{print $1}')
+          printf '%s' "$SHA256" > out/firmware.bin.sha256
+          python3 - "$SHA" "$DATE" "$SIZE" "$SHA256" "$NOTES" <<'PY' > out/manifest.json
+          import json, sys
+          sha, date, size, sha256, notes = sys.argv[1:6]
+          print(json.dumps({
+              "schema": 1,
+              "sha": sha,
+              "date": date,
+              "size": int(size),
+              "sha256": sha256,
+              "notes": notes,
+              "url": f"https://github.com/CHaerem/clawdputer/releases/download/latest/firmware.bin",
+          }, indent=2))
+          PY
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "size=$SIZE" >> "$GITHUB_OUTPUT"
           ls -lh out
+          cat out/manifest.json
 
       - name: Publish "latest" release (OTA)
         if: github.event_name == 'push'
@@ -184,15 +212,24 @@ jobs:
           body: |
             Auto-built from commit ${{ github.sha }}.
 
-            The Cardputer self-update service polls this release every
-            5 minutes and applies new firmware automatically (see
-            firmware/src/services/updater.cpp).
+            Asset       | Purpose
+            ------------|---------------------------------------------
+            `firmware.bin`        | Application image streamed into the OTA partition
+            `firmware.bin.sha256` | Hex SHA-256 of `firmware.bin` for post-write verification
+            `manifest.json`       | Single-source manifest: sha, date, size, sha256, notes, url
+            `version.txt`         | Legacy two-line manifest (sha + date) for older firmware
 
-            Mac bridge binary is published separately under the
-            `bridge-latest` tag — `host/install/online.sh` knows to
-            fetch from there.
+            New devices fetch `manifest.json`; older ones fall back to
+            `version.txt`. Either way, the updater verifies the SHA-256
+            of the written OTA partition against the manifest before
+            committing the boot partition swap.
+
+            Mac bridge binary lives under the `bridge-latest` tag —
+            `host/install/online.sh` knows to fetch from there.
           files: |
             out/firmware.bin
+            out/firmware.bin.sha256
+            out/manifest.json
             out/version.txt
           fail_on_unmatched_files: true
           make_latest: "true"

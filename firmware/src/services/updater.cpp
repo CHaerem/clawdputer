@@ -1,30 +1,53 @@
-// GitOps self-update: fetch the project's "latest" GitHub release manifest.
-// If newer than the running build, stream firmware.bin into the inactive
-// OTA partition via HTTPUpdate and reboot into it.
+// GitOps self-update — robust pipeline that never gets stuck.
 //
-// Runs live from normal boot — the IDF-component build with mbedTLS
-// DYNAMIC_BUFFER fits the github.com handshake in fragmented heap.
-// installNow() pauses BLE + releases the canvas + pauses SD to free
-// contiguous bytes for HTTPUpdate's internal buffers, then flashes in place.
+// Flow (each step bounded by a wall-clock timeout):
+//   1. Preparing      — pause BLE + release canvas + pause SD to free
+//                       contiguous heap for the TLS handshake.
+//   2. WaitingForWifi — up to 10 s; fails fast if STA never associates.
+//   3. FetchingManifest — pull manifest.json (single source of truth:
+//                       sha / date / size / sha256 / notes / url) with
+//                       up to 3 retries + exponential backoff. Falls
+//                       back to legacy version.txt if the JSON file is
+//                       missing (older releases pre-dating schema v1).
+//   4. ComparingVersions — short-circuit if device sha matches manifest
+//                       or device is newer.
+//   5. Downloading    — stream firmware.bin straight into the inactive
+//                       OTA partition while feeding every chunk through
+//                       a mbedtls_sha256 context. Stall watchdog aborts
+//                       if 20 s pass without a byte; 3 retries with
+//                       backoff before declaring failure.
+//   6. Verifying      — compare computed SHA-256 against manifest.sha256
+//                       BEFORE Update.end(true) — partition boot pointer
+//                       is not flipped on mismatch, so a corrupted
+//                       download can never brick the device.
+//   7. Rebooting      — Update.end(true) flipped the boot partition;
+//                       NVS "pending" flag was written earlier; restart.
 //
-// A background FreeRTOS task (updater_bg) polls the manifest periodically so
-// the statusbar can show "update available" without the user blindly tapping
-// "check & install →".
+// TLS:  WiFiClientSecure attaches the IDF CA bundle
+// (esp_crt_bundle_attach via setCACertBundle) so github.com and
+// releases.githubusercontent.com are validated against ~30 bundled
+// Mozilla NSS roots. setInsecure() is gone.
 //
-// Rollback: before flashing we mark a "pending" flag in NVS. The new image
-// must run stably for HEALTH_CONFIRM_MS to clear the flag. Three failed
-// boot attempts trigger an automatic switch back to the previous partition.
+// Rollback: pre-flash we write {pending=true, boots=0, target=sha} to
+// NVS. updater::begin() on the next boot increments boots; if >3 we
+// switch boot partition back. tick() clears pending after 30 s of
+// healthy main loop.
 
 #include "updater.h"
 
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include <HTTPClient.h>
-#include <HTTPUpdate.h>
 #include <M5Cardputer.h>
 #include <Preferences.h>
+#include <Update.h>
 #include <WiFiClientSecure.h>
 #include <esp_ota_ops.h>
+#include <mbedtls/sha256.h>
 #include <time.h>
+
+#include <algorithm>
+#include <cstdio>
 
 #include "ble.h"
 #include "sd.h"
@@ -41,31 +64,49 @@
 
 namespace {
 
-constexpr const char* MANIFEST_URL =
+constexpr const char* MANIFEST_JSON_URL =
+    "https://github.com/CHaerem/clawdputer/releases/latest/download/manifest.json";
+constexpr const char* MANIFEST_TXT_URL =
     "https://github.com/CHaerem/clawdputer/releases/latest/download/version.txt";
-constexpr const char* FIRMWARE_URL =
+constexpr const char* DEFAULT_FIRMWARE_URL =
     "https://github.com/CHaerem/clawdputer/releases/latest/download/firmware.bin";
+
 constexpr uint32_t HEALTH_CONFIRM_MS    = 30UL * 1000UL;
 constexpr int      MAX_BOOT_ATTEMPTS    = 3;
-constexpr uint32_t BG_FIRST_CHECK_MS    = 60UL * 1000UL;            // 60s after boot
-constexpr uint32_t BG_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL; // 6h thereafter
-// Even with mbedTLS DYNAMIC_BUFFER the github.com handshake needs a
-// contiguous working block. Empirically ~12 KB largest free isn't enough
-// and crashes the wifi driver. Skip the check below this floor and try
-// again next interval — the manual "check & install →" path pauses BLE
-// + canvas which clears the headroom regardless.
+constexpr uint32_t BG_FIRST_CHECK_MS    = 60UL * 1000UL;
+constexpr uint32_t BG_CHECK_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;
 constexpr size_t   BG_MIN_LARGEST_BLOCK = 28UL * 1024UL;
 
-// Decides whether a published release should be flagged as an update worth
-// installing. SHA mismatch alone isn't enough — if the device's build date
-// is on or after the published one, this is a downgrade (e.g. a local USB
-// flash that ran ahead of CI). Falls back to plain SHA comparison when
-// either date is missing.
+constexpr int      NET_RETRIES            = 3;
+constexpr uint32_t NET_BACKOFF_BASE_MS    = 1000;
+// HTTPClient::setTimeout takes uint16_t (per-read stall, milliseconds),
+// so it has to fit in 65535. Total download wall-clock is enforced by
+// DOWNLOAD_BUDGET_MS in the streaming loop below.
+constexpr uint16_t MANIFEST_HTTP_TIMEOUT  = 15000;
+constexpr uint16_t DOWNLOAD_HTTP_TIMEOUT  = 30000;
+constexpr uint32_t DOWNLOAD_BUDGET_MS     = 120UL * 1000UL;
+constexpr uint32_t DOWNLOAD_STALL_MS      = 20000;
+constexpr uint32_t WIFI_WAIT_MS           = 10000;
+constexpr uint32_t INSTALL_WALL_BUDGET_MS = 5UL * 60UL * 1000UL;
+
+// IDF certificate bundle (compiled in by CONFIG_MBEDTLS_CERTIFICATE_BUNDLE).
+// arduino-esp32's WiFiClientSecure::setCACertBundle attaches it to the
+// mbedtls SSL context.
+extern const uint8_t kRootCABundleStart[] asm("_binary_x509_crt_bundle_start");
+
+struct Manifest {
+    std::string sha;
+    std::string date;
+    uint32_t    size = 0;
+    std::string sha256;
+    std::string notes;
+    std::string url;
+};
+
 bool isRealUpgrade(const std::string& latestSha, const std::string& latestDate) {
     if (latestSha == CLAWD_BUILD_SHA) return false;
     std::string deviceDate = CLAWD_BUILD_DATE;
     if (!deviceDate.empty() && !latestDate.empty()) {
-        // ISO 8601 YYYY-MM-DD lex-compares correctly.
         return latestDate > deviceDate;
     }
     return true;
@@ -78,6 +119,7 @@ bool            g_confirmed   = false;
 std::string     g_latest;
 std::string     g_latestBuiltAt;
 std::string     g_lastError;
+const char*     g_progressPhase = "downloading…";
 
 const char* statusTextFor(updater::Status s) {
     switch (s) {
@@ -92,9 +134,6 @@ const char* statusTextFor(updater::Status s) {
 }
 
 uint8_t encodeStatus(updater::Status s) {
-    // Only persist terminal states. Transient ones (Checking, Downloading)
-    // are replaced by what they collapse to, so the UI never shows
-    // "checking…" frozen after a reboot.
     switch (s) {
         case updater::Status::UpToDate:        return 1;
         case updater::Status::UpdateAvailable: return 2;
@@ -163,67 +202,8 @@ void rollbackNow() {
     }
 }
 
-bool fetchManifest(WiFiClientSecure& client,
-                   std::string& shaOut, std::string& builtAtOut) {
-    HTTPClient http;
-    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    if (!http.begin(client, MANIFEST_URL)) {
-        g_lastError = "manifest http begin failed";
-        return false;
-    }
-    int code = http.GET();
-    if (code != HTTP_CODE_OK) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "manifest http %d", code);
-        g_lastError = buf;
-        http.end();
-        return false;
-    }
-    String body = http.getString();
-    http.end();
-    body.trim();
-    // Line 1: short SHA. Line 2 (optional): ISO 8601 build date.
-    int nl = body.indexOf('\n');
-    if (nl < 0) {
-        shaOut     = body.c_str();
-        builtAtOut = "";
-    } else {
-        String first  = body.substring(0, nl);
-        String second = body.substring(nl + 1);
-        first.trim();
-        second.trim();
-        int nl2 = second.indexOf('\n');
-        if (nl2 >= 0) second = second.substring(0, nl2);
-        shaOut     = first.c_str();
-        builtAtOut = second.c_str();
-    }
-    return true;
-}
-
-// HTTPUpdate's onProgress callback has no userdata pointer, so the painter
-// reads the phase string from this global. Set by installNow() before the
-// flash starts.
-const char* g_progressPhase = "downloading…";
-
-void onFlashProgress(int cur, int total) {
-    static int lastPct = -1;
-    if (total <= 0) {
-        // Content-Length missing (chunked transfer through the GitHub
-        // redirect). Show an indeterminate bar with the byte count so
-        // the user knows we haven't hung.
-        char buf[40];
-        snprintf(buf, sizeof(buf), "%s %dKB", g_progressPhase, cur / 1024);
-        drawInstall(buf, -1);
-        return;
-    }
-    int pct = (int)((int64_t)cur * 100 / total);
-    if (pct == lastPct) return;
-    lastPct = pct;
-    drawInstall(g_progressPhase, pct);
-}
-
-// Pre-flash NVS bookkeeping so the boot-attempt rollback can fire if the
-// new image doesn't boot cleanly.
+// Pre-flash NVS bookkeeping so the boot-attempt rollback can fire if
+// the new image doesn't boot cleanly.
 void markFlashPending(const std::string& targetSha) {
     Preferences prefs;
     prefs.begin("updater", false);
@@ -233,18 +213,315 @@ void markFlashPending(const std::string& targetSha) {
     prefs.end();
 }
 
+void clearFlashPending() {
+    Preferences prefs;
+    prefs.begin("updater", false);
+    prefs.putBool("pending", false);
+    prefs.putInt("boots", 0);
+    prefs.end();
+}
+
+// Apply the standard hardening to a WiFiClientSecure: CA bundle, bounded
+// handshake/socket waits. All HTTPS in this file goes through one of
+// these.
+void configureClient(WiFiClientSecure& client) {
+    client.setCACertBundle(kRootCABundleStart);
+    client.setHandshakeTimeout(15);   // seconds
+    client.setTimeout(15000);          // ms
+}
+
+// Drain an HTTPClient body into a String, then close. Used for small
+// responses (manifest.json, version.txt) — not for firmware.bin.
+bool httpGetString(WiFiClientSecure& client, const char* url, String& out,
+                   int& httpCode, uint16_t timeoutMs) {
+    HTTPClient http;
+    http.setConnectTimeout(timeoutMs);
+    http.setTimeout(timeoutMs);
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    if (!http.begin(client, url)) {
+        httpCode = -1;
+        return false;
+    }
+    httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK) {
+        http.end();
+        return false;
+    }
+    out = http.getString();
+    http.end();
+    return true;
+}
+
+bool fetchManifestJson(WiFiClientSecure& client, Manifest& out) {
+    String body;
+    int code = 0;
+    if (!httpGetString(client, MANIFEST_JSON_URL, body, code, MANIFEST_HTTP_TIMEOUT)) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "manifest.json http %d", code);
+        g_lastError = buf;
+        return false;
+    }
+
+    JsonDocument doc;
+    DeserializationError err = deserializeJson(doc, body);
+    if (err) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "manifest parse: %s", err.c_str());
+        g_lastError = buf;
+        return false;
+    }
+    out.sha    = doc["sha"]    | "";
+    out.date   = doc["date"]   | "";
+    out.size   = doc["size"]   | 0u;
+    out.sha256 = doc["sha256"] | "";
+    out.notes  = doc["notes"]  | "";
+    out.url    = doc["url"]    | "";
+    if (out.url.empty()) out.url = DEFAULT_FIRMWARE_URL;
+    if (out.sha.empty()) {
+        g_lastError = "manifest: missing sha";
+        return false;
+    }
+    if (out.sha256.empty() || out.size == 0) {
+        g_lastError = "manifest: missing sha256/size";
+        return false;
+    }
+    return true;
+}
+
+// version.txt fallback. Two lines: sha + date. No sha256/size — the
+// download path skips verification (degraded mode for releases predating
+// schema v1). Used only if manifest.json 404s.
+bool fetchManifestLegacy(WiFiClientSecure& client, Manifest& out) {
+    String body;
+    int code = 0;
+    if (!httpGetString(client, MANIFEST_TXT_URL, body, code, MANIFEST_HTTP_TIMEOUT)) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "version.txt http %d", code);
+        g_lastError = buf;
+        return false;
+    }
+    body.trim();
+    int nl = body.indexOf('\n');
+    if (nl < 0) {
+        out.sha = body.c_str();
+    } else {
+        String first  = body.substring(0, nl);
+        String second = body.substring(nl + 1);
+        first.trim(); second.trim();
+        int nl2 = second.indexOf('\n');
+        if (nl2 >= 0) second = second.substring(0, nl2);
+        out.sha  = first.c_str();
+        out.date = second.c_str();
+    }
+    out.url = DEFAULT_FIRMWARE_URL;
+    if (out.sha.empty()) {
+        g_lastError = "version.txt: empty sha";
+        return false;
+    }
+    Serial.println("[updater] using legacy version.txt manifest (no sha256 verify)");
+    return true;
+}
+
+bool fetchManifestWithRetries(WiFiClientSecure& client, Manifest& out) {
+    for (int i = 0; i < NET_RETRIES; i++) {
+        g_lastError.clear();
+        if (fetchManifestJson(client, out)) return true;
+        // Only fall through to version.txt if json was unreachable (404
+        // or network), not if it parsed but was malformed.
+        if (g_lastError.find("http 404") != std::string::npos ||
+            g_lastError.find("http -") != std::string::npos) {
+            if (fetchManifestLegacy(client, out)) return true;
+        }
+        if (i + 1 < NET_RETRIES) {
+            uint32_t backoff = NET_BACKOFF_BASE_MS << i;
+            Serial.printf("[updater] manifest retry %d/%d in %ums (last: %s)\n",
+                          i + 1, NET_RETRIES, (unsigned)backoff,
+                          g_lastError.c_str());
+            delay(backoff);
+        }
+    }
+    return false;
+}
+
+// Stream firmware into the inactive OTA partition while computing
+// SHA-256 inline. On mismatch we call Update.abort() so the boot
+// partition pointer is NOT flipped — a corrupted download cannot brick
+// the device.
+//
+// Returns true iff Update.end(true) has committed the new boot partition
+// and the caller can reboot.
+bool downloadAndVerifyOnce(WiFiClientSecure& client, const Manifest& m) {
+    HTTPClient http;
+    http.setConnectTimeout(DOWNLOAD_HTTP_TIMEOUT);
+    http.setTimeout(DOWNLOAD_HTTP_TIMEOUT);
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    if (!http.begin(client, m.url.c_str())) {
+        g_lastError = "download begin failed";
+        return false;
+    }
+    int code = http.GET();
+    if (code != HTTP_CODE_OK) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "download http %d", code);
+        g_lastError = buf;
+        http.end();
+        return false;
+    }
+    int contentLength = http.getSize();
+    if (contentLength <= 0) contentLength = (int)m.size;
+    if (contentLength <= 0) {
+        g_lastError = "download: unknown size";
+        http.end();
+        return false;
+    }
+    if (m.size && (uint32_t)contentLength != m.size) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "size mismatch %d != %u",
+                 contentLength, (unsigned)m.size);
+        g_lastError = buf;
+        http.end();
+        return false;
+    }
+
+    if (!Update.begin((size_t)contentLength, U_FLASH)) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "Update.begin: %s", Update.errorString());
+        g_lastError = buf;
+        http.end();
+        return false;
+    }
+
+    mbedtls_sha256_context shaCtx;
+    mbedtls_sha256_init(&shaCtx);
+    mbedtls_sha256_starts(&shaCtx, 0);  // 0 = SHA-256 (not SHA-224)
+
+    WiFiClient*  stream         = http.getStreamPtr();
+    uint8_t      buf[2048];
+    size_t       written        = 0;
+    uint32_t     lastProgressMs = 0;
+    uint32_t     lastDataMs     = millis();
+    uint32_t     startMs        = millis();
+    int          lastPct        = -1;
+
+    auto teardown = [&](const char* err) {
+        Update.abort();
+        mbedtls_sha256_free(&shaCtx);
+        http.end();
+        if (err) g_lastError = err;
+    };
+
+    while (written < (size_t)contentLength) {
+        if (!http.connected() && !stream->available()) {
+            teardown("connection dropped");
+            return false;
+        }
+        size_t avail = stream->available();
+        if (avail > 0) {
+            int n = stream->readBytes(buf, std::min(avail, sizeof(buf)));
+            if (n > 0) {
+                if (Update.write(buf, (size_t)n) != (size_t)n) {
+                    char errbuf[96];
+                    snprintf(errbuf, sizeof(errbuf), "flash write: %s",
+                             Update.errorString());
+                    teardown(errbuf);
+                    return false;
+                }
+                mbedtls_sha256_update(&shaCtx, buf, (size_t)n);
+                written += (size_t)n;
+                lastDataMs = millis();
+                if (millis() - lastProgressMs > 200) {
+                    int pct = (int)((int64_t)written * 100 / contentLength);
+                    if (pct != lastPct) {
+                        drawInstall(g_progressPhase, pct);
+                        lastPct = pct;
+                    }
+                    lastProgressMs = millis();
+                }
+            }
+        } else {
+            if (millis() - lastDataMs > DOWNLOAD_STALL_MS) {
+                teardown("download stalled");
+                return false;
+            }
+            delay(1);
+        }
+        if (millis() - startMs > DOWNLOAD_BUDGET_MS) {
+            teardown("download timeout");
+            return false;
+        }
+    }
+
+    http.end();
+
+    if (written != (size_t)contentLength) {
+        Update.abort();
+        mbedtls_sha256_free(&shaCtx);
+        char errbuf[80];
+        snprintf(errbuf, sizeof(errbuf), "truncated %u/%d",
+                 (unsigned)written, contentLength);
+        g_lastError = errbuf;
+        return false;
+    }
+
+    uint8_t hash[32];
+    mbedtls_sha256_finish(&shaCtx, hash);
+    mbedtls_sha256_free(&shaCtx);
+
+    char hashHex[65];
+    for (int i = 0; i < 32; i++) {
+        snprintf(hashHex + i * 2, 3, "%02x", hash[i]);
+    }
+
+    if (!m.sha256.empty() && m.sha256 != hashHex) {
+        Update.abort();
+        char errbuf[120];
+        snprintf(errbuf, sizeof(errbuf),
+                 "sha256 mismatch (got %.8s…, want %.8s…)",
+                 hashHex, m.sha256.c_str());
+        g_lastError = errbuf;
+        Serial.printf("[updater] %s\n", errbuf);
+        return false;
+    }
+
+    g_progressPhase = "committing…";
+    drawInstall(g_progressPhase, 100);
+
+    if (!Update.end(true)) {
+        char errbuf[96];
+        snprintf(errbuf, sizeof(errbuf), "Update.end: %s", Update.errorString());
+        g_lastError = errbuf;
+        return false;
+    }
+
+    Serial.printf("[updater] flash committed: %u bytes, sha256=%.16s…\n",
+                  (unsigned)written, hashHex);
+    return true;
+}
+
+bool downloadAndVerifyWithRetries(WiFiClientSecure& client, const Manifest& m) {
+    for (int i = 0; i < NET_RETRIES; i++) {
+        g_lastError.clear();
+        if (downloadAndVerifyOnce(client, m)) return true;
+        if (i + 1 < NET_RETRIES) {
+            uint32_t backoff = NET_BACKOFF_BASE_MS << i;
+            Serial.printf("[updater] download retry %d/%d in %ums (last: %s)\n",
+                          i + 1, NET_RETRIES, (unsigned)backoff,
+                          g_lastError.c_str());
+            delay(backoff);
+        }
+    }
+    return false;
+}
+
 // Run the manifest check (no flash) on the main thread, pausing BLE and
 // the canvas if needed to free contiguous heap for the TLS handshake.
-// Returns true if the fetch completed (regardless of whether a new version
-// was found); false if we couldn't even attempt it.
+// Returns true if the fetch completed (regardless of whether a new
+// version was found); false if we couldn't even attempt it.
 bool runBackgroundCheck() {
     if (!wifi::isConnected()) return false;
 
     bool hadCanvas    = ui::canvasActive();
     bool wasBlePaused = ble::isPaused();
-
-    // Only disturb BLE if no peer is actually using it. The buddy protocol
-    // and clawd-bridge link each show up as NusLink / BridgeLink.
     bool blePeerActive = ble::isConnected(EventSource::NusLink) ||
                          ble::isConnected(EventSource::BridgeLink);
 
@@ -255,7 +532,6 @@ bool runBackgroundCheck() {
                           (unsigned)largest);
             return false;
         }
-        // Free contiguous space.
         if (hadCanvas)     ui::releaseCanvas();
         if (!wasBlePaused) ble::pause();
         delay(50);
@@ -277,35 +553,29 @@ bool runBackgroundCheck() {
     Serial.printf("[updater] bg check: free=%u largest=%u\n",
                   (unsigned)ESP.getFreeHeap(), (unsigned)largest);
     WiFiClientSecure client;
-    client.setInsecure();
-    client.setHandshakeTimeout(15);
-    client.setTimeout(15000);
-    std::string latest, builtAt;
-    bool ok = fetchManifest(client, latest, builtAt);
+    configureClient(client);
+    Manifest m;
+    bool ok = fetchManifestWithRetries(client, m);
     if (ok) {
-        g_latest         = latest;
-        g_latestBuiltAt  = builtAt;
+        g_latest         = m.sha;
+        g_latestBuiltAt  = m.date;
         g_lastError      = "";
         g_lastCheckMs    = millis();
         g_lastCheckEpoch = (uint32_t)time(nullptr);
-        if (isRealUpgrade(latest, builtAt)) {
+        if (isRealUpgrade(m.sha, m.date)) {
             g_status = updater::Status::UpdateAvailable;
             Serial.printf("[updater] bg: update available %s -> %s\n",
-                          CLAWD_BUILD_SHA, latest.c_str());
+                          CLAWD_BUILD_SHA, m.sha.c_str());
         } else {
             g_status = updater::Status::UpToDate;
-            if (latest != CLAWD_BUILD_SHA) {
-                Serial.printf("[updater] bg: device sha=%s newer than published %s (date %s vs %s)\n",
-                              CLAWD_BUILD_SHA, latest.c_str(),
-                              CLAWD_BUILD_DATE, builtAt.c_str());
+            if (m.sha != CLAWD_BUILD_SHA) {
+                Serial.printf("[updater] bg: device sha=%s newer than published %s\n",
+                              CLAWD_BUILD_SHA, m.sha.c_str());
             }
         }
         persistResult();
     } else {
-        Serial.printf("[updater] bg check failed: %s\n",
-                      g_lastError.c_str());
-        // Don't persist failure — likely transient (wifi flake). Last good
-        // status stays in NVS so the UI doesn't flap.
+        Serial.printf("[updater] bg check failed: %s\n", g_lastError.c_str());
     }
     restore();
     return true;
@@ -322,7 +592,6 @@ void begin() {
     int  bootAttempts = prefs.getInt("boots", 0);
     bool rolledBack   = prefs.getBool("rolled_back", false);
 
-    // Restore last-known status so the UI isn't blank on a fresh boot.
     g_status         = decodeStatus(prefs.getUChar("result", 0));
     g_latest         = prefs.getString("latest", "").c_str();
     g_latestBuiltAt  = prefs.getString("builtAt", "").c_str();
@@ -347,11 +616,9 @@ void begin() {
     } else {
         prefs.end();
     }
-
 }
 
 void tick() {
-    // Confirm boot health after the device has been running stably.
     if (!g_confirmed && millis() >= HEALTH_CONFIRM_MS) {
         Preferences prefs;
         prefs.begin("updater", false);
@@ -359,8 +626,6 @@ void tick() {
             prefs.putBool("pending", false);
             prefs.putInt("boots", 0);
             Serial.printf("[updater] boot confirmed healthy (sha=%s)\n", CLAWD_BUILD_SHA);
-            // Also tell the ESP-IDF rollback system, in case the framework
-            // is built with CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE.
             const esp_partition_t* running = esp_ota_get_running_partition();
             esp_ota_img_states_t state;
             if (running && esp_ota_get_state_partition(running, &state) == ESP_OK
@@ -372,9 +637,6 @@ void tick() {
         g_confirmed = true;
     }
 
-    // Opportunistic telemetry flush — a queued report from a failed live
-    // submit will get filed the next time wifi is available and we have a
-    // free heartbeat. Cheap: drain() is a no-op when the queue is empty.
     static uint32_t lastDrainMs = 0;
     if (millis() - lastDrainMs > 30000 && wifi::isConnected()
         && telemetry::pending()) {
@@ -382,11 +644,6 @@ void tick() {
         telemetry::drain();
     }
 
-    // Periodic update check: BG_FIRST_CHECK_MS after boot, then every
-    // BG_CHECK_INTERVAL_MS. Runs on the main thread so it can safely pause
-    // BLE + canvas (the only way to free enough contiguous heap for the
-    // mbedTLS handshake on this hardware). UI freezes for ~2-3 s during
-    // the fetch; acceptable at this cadence.
     static uint32_t lastCheckAttemptMs = 0;
     static bool     didFirstCheck      = false;
     uint32_t        now                = millis();
@@ -401,13 +658,9 @@ void tick() {
 }
 
 void installNow() {
-    // Live OTA from normal boot. With mbedTLS DYNAMIC_BUFFER the github.com
-    // handshake fits in fragmented heap, so we pause BLE + release canvas
-    // to free contiguous bytes for HTTPUpdate's internal buffers, then
-    // flash in place. Single reboot via HTTPUpdate.rebootOnUpdate(true) on
-    // success. On failure we restore the UI and return to the caller.
+    const uint32_t wallStart = millis();
 
-    bool hadCanvas  = ui::canvasActive();
+    bool hadCanvas    = ui::canvasActive();
     bool wasBlePaused = ble::isPaused();
     bool wasSdPaused  = sd::isPaused();
     if (hadCanvas)     ui::releaseCanvas();
@@ -425,52 +678,51 @@ void installNow() {
         if (hadCanvas)     ui::tryAcquireCanvas();
     };
 
+    auto fail = [&](const char* msg) {
+        g_status = Status::Failed;
+        if (g_lastError.empty()) g_lastError = msg;
+        persistResult();
+        clearFlashPending();
+        drawInstall(g_lastError.c_str(), -1);
+        delay(2500);
+        restoreUi();
+    };
+
+    auto budgetBlown = [&]() {
+        return millis() - wallStart > INSTALL_WALL_BUDGET_MS;
+    };
+
     if (!wifi::isConnected()) {
         drawInstall("waiting for wifi…", -1);
-        uint32_t deadline = millis() + 10000;
+        uint32_t deadline = millis() + WIFI_WAIT_MS;
         while (!wifi::isConnected() && millis() < deadline) delay(100);
     }
-    if (!wifi::isConnected()) {
-        g_status    = Status::Failed;
-        g_lastError = "wifi not connected";
-        persistResult();
-        drawInstall("wifi unavailable", -1);
-        delay(1800);
-        restoreUi();
-        return;
-    }
+    if (!wifi::isConnected()) { fail("wifi unavailable"); return; }
+    if (budgetBlown())        { fail("install budget exceeded"); return; }
 
     drawInstall("checking manifest…", -1);
     WiFiClientSecure client;
-    client.setInsecure();
-    // Bound the TLS handshake + socket waits so a stalled connection
-    // surfaces as an error instead of hanging the UI forever (the
-    // "download never finishes" symptom — github.com → releases.github
-    // usercontent.com is a fresh handshake on a different host, and
-    // without these the second handshake can sit waiting for bytes
-    // that never arrive).
-    client.setHandshakeTimeout(15);   // seconds
-    client.setTimeout(15000);          // ms — socket read/connect
+    configureClient(client);
 
-    std::string latest, builtAt;
-    if (!fetchManifest(client, latest, builtAt)) {
-        g_status    = Status::Failed;
-        // g_lastError set by fetchManifest
-        persistResult();
-        drawInstall(g_lastError.c_str(), -1);
-        delay(2200);
-        restoreUi();
+    Manifest m;
+    if (!fetchManifestWithRetries(client, m)) {
+        fail(g_lastError.c_str());
         return;
     }
+    Serial.printf("[updater] manifest: sha=%s date=%s size=%u sha256=%.8s%s\n",
+                  m.sha.c_str(), m.date.c_str(),
+                  (unsigned)m.size,
+                  m.sha256.empty() ? "(absent)" : m.sha256.c_str(),
+                  m.sha256.empty() ? "" : "…");
 
-    if (!isRealUpgrade(latest, builtAt)) {
+    if (!isRealUpgrade(m.sha, m.date)) {
         g_status         = Status::UpToDate;
-        g_latest         = latest;
-        g_latestBuiltAt  = builtAt;
+        g_latest         = m.sha;
+        g_latestBuiltAt  = m.date;
         g_lastError      = "";
         g_lastCheckEpoch = (uint32_t)time(nullptr);
         persistResult();
-        const char* msg = (latest == CLAWD_BUILD_SHA)
+        const char* msg = (m.sha == CLAWD_BUILD_SHA)
                             ? "already up to date"
                             : "device is newer";
         drawInstall(msg, 100);
@@ -478,54 +730,33 @@ void installNow() {
         restoreUi();
         return;
     }
+    if (budgetBlown()) { fail("install budget exceeded"); return; }
 
     Serial.printf("[updater] live: flashing %s (have %s)\n",
-                  latest.c_str(), CLAWD_BUILD_SHA);
+                  m.sha.c_str(), CLAWD_BUILD_SHA);
     g_status        = Status::Downloading;
-    g_latest        = latest;
-    g_latestBuiltAt = builtAt;
-    g_progressPhase = "downloading…";
+    g_latest        = m.sha;
+    g_latestBuiltAt = m.date;
+    g_progressPhase = m.sha256.empty() ? "downloading…" : "downloading (sha256)";
     drawInstall(g_progressPhase, 0);
 
-    markFlashPending(latest);
+    markFlashPending(m.sha);
 
-    // Fresh client for the firmware stream. The manifest fetch above
-    // already consumed `client` for a github.com handshake; reusing it
-    // for the redirect-followed releases.githubusercontent.com stream
-    // left residual TLS state that could deadlock the second handshake
-    // on this hardware (~31 KB largest free block, fragmented). A fresh
-    // WiFiClientSecure starts clean and inherits the same timeouts.
+    // Fresh client for the download — the manifest fetch above consumed
+    // `client` for a github.com handshake; reusing it for the redirect
+    // target (releases.githubusercontent.com) left residual TLS state
+    // that could deadlock the second handshake on this hardware.
     WiFiClientSecure dlClient;
-    dlClient.setInsecure();
-    dlClient.setHandshakeTimeout(15);
-    dlClient.setTimeout(15000);
-
-    httpUpdate.rebootOnUpdate(true);
-    httpUpdate.onProgress(onFlashProgress);
-    httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-    auto ret = httpUpdate.update(dlClient, FIRMWARE_URL);
-    // Success reboots inside httpUpdate.update(). Anything below is failure.
-    (void)ret;
-
-    std::string err = httpUpdate.getLastErrorString().c_str();
-    if (err.empty()) err = "flash failed";
-    g_status    = Status::Failed;
-    g_lastError = err;
-    persistResult();
-
-    // Clear pending — flash never completed, so we shouldn't roll back on
-    // the next boot.
-    {
-        Preferences prefs;
-        prefs.begin("updater", false);
-        prefs.putBool("pending", false);
-        prefs.putInt("boots", 0);
-        prefs.end();
+    configureClient(dlClient);
+    if (!downloadAndVerifyWithRetries(dlClient, m)) {
+        fail(g_lastError.c_str());
+        return;
     }
 
-    drawInstall(err.c_str(), -1);
-    delay(2500);
-    restoreUi();
+    Serial.println("[updater] reboot into new image");
+    drawInstall("rebooting…", 100);
+    delay(500);
+    ESP.restart();
 }
 
 Status      status()           { return g_status; }

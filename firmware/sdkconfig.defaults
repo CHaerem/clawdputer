@@ -33,3 +33,14 @@ CONFIG_BT_CONTROLLER_ENABLED=y
 # Without these, link fails with undefined ssl_init/start_ssl_client/...
 CONFIG_MBEDTLS_PSK_MODES=y
 CONFIG_MBEDTLS_KEY_EXCHANGE_PSK=y
+
+# Bundled CA roots so the OTA updater can validate github.com /
+# releases.githubusercontent.com instead of relying on
+# client.setInsecure(). The "DEFAULT" bundle is ~30 well-known roots
+# from Mozilla's NSS, totalling ~32 KB of flash — covers GitHub today
+# (DigiCert Global Root G2, ISRG Root X1) and absorbs the routine CA
+# rotations that Let's Encrypt and DigiCert do. updater::installNow
+# calls esp_crt_bundle_attach and sets it on every WiFiClientSecure
+# before any HTTPS call.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
