@@ -98,6 +98,19 @@ jobs:
         working-directory: firmware
         run: pio run -e cardputer
 
+      - name: Stash OTA artifacts
+        # PIO's IDF-component path occasionally wipes
+        # `.pio/build/cardputer/` when the next env's CMake configure
+        # runs (CI-only — locally it doesn't reproduce). Copy what we
+        # need for the OTA release out to /tmp before building the
+        # cardputer-wokwi env, so the size guard + release publisher
+        # have a stable source regardless of what PIO does next.
+        run: |
+          mkdir -p /tmp/ota
+          cp firmware/.pio/build/cardputer/firmware.bin /tmp/ota/firmware.bin
+          cp firmware/.pio/build/cardputer/firmware.elf /tmp/ota/firmware.elf
+          ls -la /tmp/ota
+
       - name: Build cardputer-wokwi (simulator firmware)
         working-directory: firmware
         run: pio run -e cardputer-wokwi
@@ -155,7 +168,7 @@ jobs:
         # default_8MB.csv reserves 3 342 336 bytes per app slot; cap at
         # 80% so OTA has room to write the new image before swapping.
         run: |
-          SIZE=$(stat -c%s firmware/.pio/build/cardputer/firmware.bin)
+          SIZE=$(stat -c%s /tmp/ota/firmware.bin)
           MAX=2670000
           printf 'firmware.bin size: %s bytes (limit %s)\n' "$SIZE" "$MAX"
           if [ "$SIZE" -gt "$MAX" ]; then
@@ -172,7 +185,7 @@ jobs:
           DATE=$(git show -s --format=%cI HEAD | cut -c1-10)
           NOTES=$(git show -s --format=%s HEAD | tr -d '"' | cut -c1-120)
           mkdir -p out
-          cp firmware/.pio/build/cardputer/firmware.bin out/firmware.bin
+          cp /tmp/ota/firmware.bin out/firmware.bin
           # Legacy two-line manifest. Devices flashed before the
           # manifest.json era still poll this; can be retired once every
           # deployed device has rolled through the new updater (which
