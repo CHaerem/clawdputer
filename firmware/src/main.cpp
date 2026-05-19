@@ -60,6 +60,7 @@ void enter(const App* app) {
     health::noteAppEntered(app->id);
     if (g_active->onEnter) g_active->onEnter();
     Serial.printf("[clawdputer] entered app: %s\n", g_active->id);
+    Serial0.printf("[clawdputer] entered app: %s\n", g_active->id);
 }
 
 const App* findApp(const char* id) {
@@ -169,10 +170,17 @@ void setup() {
     M5Cardputer.Display.setRotation(1);
 
     Serial.begin(115200);
+    // UART0 mirror for the Wokwi simulator (which captures GPIO 43 TX,
+    // not USB CDC). On real hardware UART0 is unused outside the dock
+    // header, so duplicate output is harmless.
+    Serial0.begin(115200);
     delay(200);
     Serial.println();
     Serial.println("[clawdputer] boot");
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
+    Serial0.println();
+    Serial0.println("[clawdputer] boot");
+    Serial0.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
     // Touching ui::display() triggers the canvas allocation so we know up
     // front whether the backbuffer is available. Allocated first because
