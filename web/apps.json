@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-05-18T18:55:43+00:00",
-  "sha": "c7774cf",
+  "generated_at": "2026-05-19T06:59:57+00:00",
+  "sha": "75ea021",
   "apps": [
     {
       "id": "battery",
@@ -68,7 +68,7 @@
     {
       "id": "snake",
       "name": "Snake",
-      "description": "Eat dots, don't bite yourself",
+      "description": "Eat dots, tilt or type",
       "keysAsArrows": true,
       "hidden": false,
       "services": [

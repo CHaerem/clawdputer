@@ -5,6 +5,7 @@
 
 # PlatformIO IDF-component build: regenerated from sdkconfig.defaults each build
 firmware/sdkconfig.cardputer
+firmware/sdkconfig.cardputer-wokwi
 # Auto-generated src/CMakeLists.txt (PIO writes this if missing)
 firmware/src/CMakeLists.txt
 # Local serial-read helper

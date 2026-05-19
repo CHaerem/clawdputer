@@ -20,4 +20,10 @@ bool tryAcquireCanvas();
 void releaseCanvas();
 bool canvasActive();
 
+// Resize/reorient the canvas + physical display. Used by apps that toggle
+// landscape/portrait at runtime (snake, tetris). Pass {240,135,1} to
+// restore framework defaults; callers MUST do so in onExit so the next
+// app sees a correctly-sized canvas.
+bool reconfigureCanvas(int w, int h, int rotation);
+
 }  // namespace ui
