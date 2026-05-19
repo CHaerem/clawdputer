@@ -165,20 +165,23 @@ extern "C" const char* clawd_last_key_summary() {
 }
 
 void setup() {
+    // UART0 ping as the very first action — used by the Wokwi smoke
+    // test to disambiguate "Wokwi can see UART0" from "M5Cardputer.begin
+    // hung." On real hardware UART0 is unused outside the dock header,
+    // so the extra bytes are harmless.
+    Serial0.begin(115200);
+    Serial0.println();
+    Serial0.println("[clawdputer] pre-init");
+
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);
     M5Cardputer.Display.setRotation(1);
 
     Serial.begin(115200);
-    // UART0 mirror for the Wokwi simulator (which captures GPIO 43 TX,
-    // not USB CDC). On real hardware UART0 is unused outside the dock
-    // header, so duplicate output is harmless.
-    Serial0.begin(115200);
     delay(200);
     Serial.println();
     Serial.println("[clawdputer] boot");
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
-    Serial0.println();
     Serial0.println("[clawdputer] boot");
     Serial0.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
