@@ -75,4 +75,20 @@ void releaseCanvas() {
 
 bool canvasActive() { return g_active; }
 
+bool reconfigureCanvas(int w, int h, int rotation) {
+    if (g_active) {
+        g_canvas.deleteSprite();
+        g_active = false;
+    }
+    M5Cardputer.Display.setRotation(rotation);
+    g_canvas.setColorDepth(8);
+    if (!g_canvas.createSprite(w, h)) {
+        Serial.printf("[ui] reconfigureCanvas %dx%d r=%d failed (heap %u)\n",
+                      w, h, rotation, (unsigned)ESP.getFreeHeap());
+        return false;
+    }
+    g_active = true;
+    return true;
+}
+
 }  // namespace ui
