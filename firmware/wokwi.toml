@@ -26,8 +26,8 @@ version = 1
 # emulator needs the full flash layout, not just the app binary, or the
 # ROM bootloader can't find the second-stage bootloader and nothing
 # runs (we hit this — zero serial output for ~10 commits).
-firmware = '.pio/build/cardputer/wokwi.bin'
-elf      = '.pio/build/cardputer/firmware.elf'
+firmware = '.pio/build/cardputer-wokwi/wokwi.bin'
+elf      = '.pio/build/cardputer-wokwi/firmware.elf'
 
 [[chip]]
 name   = "cardputer-keyboard"
