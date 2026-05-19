@@ -2,16 +2,14 @@
   "version": 1,
   "author": "clawdputer",
   "editor": "wokwi",
-  "_": "Wokwi simulation of the M5Stack Cardputer (non-ADV). Pinout matches M5GFX/M5Unified source: display pins from M5GFX::_panel_last (ST7789 init), keyboard matrix from M5Cardputer's IOMatrixKeyboardReader (output={8,9,11}, input={13,15,3,4,5,6,7}). M5Unified autodetects which Cardputer variant is connected by probing GPIO 5/6/8/9 — with only the keyboard chip attached (no I2C pullups on 8/9) the firmware will detect this as board_M5Cardputer. Visual layout below puts the ST7789 above the keyboard chip to mimic the physical Cardputer; the ESP32-S3 dev board sits off to the right since it stands in for the real StampS3 module hidden inside the case.",
+  "_": "Wokwi simulation of the M5Stack Cardputer (non-ADV). Pin coverage is partial: Wokwi has no StampS3 part, so we use board-esp32-s3-devkitc-1 (WROOM-1-based) which doesn't expose GPIO 33/34/etc — those are internal flash pins on the WROOM-1 module. On the real StampS3 they're freed for the ST7789's RES/DC, but here we can only wire MOSI/SCK/CS/BL (35/36/37/38) — and even those don't connect to anything because the ST7789 needs all six lines, so we drop the display part entirely. The firmware still drives those GPIOs on boot; they just no-op. Keyboard matrix (cols 8/9/11, rows 13/15/3/4/5/6/7) is fully wired to the custom cardputer-keyboard chip. GPIO 45 + 48 are grounded to break M5Unified's PowerHub I2C autodetect that would otherwise misidentify the board — combined with cfg.fallback_board = board_M5Cardputer in firmware/src/main.cpp the boot reaches the launcher with the right board type.",
   "parts": [
-    { "type": "wokwi-text", "id": "lbl-title", "top": -260, "left": -160, "attrs": { "text": "clawdputer · M5Stack Cardputer (simulated)", "fontSize": "18", "color": "#ffae42" } },
-    { "type": "wokwi-text", "id": "lbl-sub",   "top": -235, "left": -160, "attrs": { "text": "Firmware boots in Wokwi with the real Cardputer pinout. Type on the keyboard chip's \"keys\" attribute (x,y pairs) to drive input.", "fontSize": "10", "color": "#aaaaaa" } },
-
-    { "type": "board-st7789-240x135", "id": "lcd", "top": -210, "left": -40, "rotate": 0, "attrs": {} },
+    { "type": "wokwi-text", "id": "lbl-title", "top": -200, "left": -180, "attrs": { "text": "clawdputer · M5Stack Cardputer (simulated)", "fontSize": "18", "color": "#ffae42" } },
+    { "type": "wokwi-text", "id": "lbl-sub",   "top": -175, "left": -180, "attrs": { "text": "Real firmware boots in Wokwi. Display panel is omitted (GPIO 33/34 aren't on the WROOM-1-based dev board), but the launcher and keyboard scan run.", "fontSize": "10", "color": "#aaaaaa" } },
 
     { "type": "chip-cardputer-keyboard", "id": "kb", "top": 60, "left": -60, "attrs": {} },
 
-    { "type": "wokwi-pushbutton", "id": "btn-g0", "top": -180, "left": -190, "attrs": { "color": "white", "label": "G0" } },
+    { "type": "wokwi-pushbutton", "id": "btn-g0", "top": -150, "left": -190, "attrs": { "color": "white", "label": "G0" } },
 
     { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": -40, "left": 360, "attrs": { "flashSize": "8", "psramSize": "8", "fullBoot": "1" } }
   ],
@@ -19,17 +17,8 @@
     [ "esp:TX",  "$serialMonitor:RX", "",       [] ],
     [ "esp:RX",  "$serialMonitor:TX", "",       [] ],
 
-    [ "esp:GND.1", "lcd:GND",  "black", [] ],
-    [ "esp:3V3",   "lcd:VCC",  "red",   [] ],
-    [ "esp:35",    "lcd:SDA",  "green", [] ],
-    [ "esp:36",    "lcd:SCL",  "green", [] ],
-    [ "esp:34",    "lcd:DC",   "orange",[] ],
-    [ "esp:37",    "lcd:CS",   "orange",[] ],
-    [ "esp:33",    "lcd:RES",  "orange",[] ],
-    [ "esp:38",    "lcd:BL",   "yellow",[] ],
-
-    [ "esp:GND.2", "kb:GND",   "black", [] ],
-    [ "esp:3V3",   "kb:VCC",   "red",   [] ],
+    [ "esp:GND.1", "kb:GND",   "black", [] ],
+    [ "esp:3V3.1", "kb:VCC",   "red",   [] ],
     [ "esp:8",     "kb:COL_A", "blue",  [] ],
     [ "esp:9",     "kb:COL_B", "blue",  [] ],
     [ "esp:11",    "kb:COL_C", "blue",  [] ],
@@ -42,10 +31,10 @@
     [ "esp:7",     "kb:ROW6",  "purple",[] ],
 
     [ "btn-g0:1.l", "esp:0",   "green", [] ],
-    [ "btn-g0:2.l", "esp:GND.3","black",[] ],
+    [ "btn-g0:2.l", "esp:GND.2","black",[] ],
 
-    [ "esp:45", "esp:GND.4", "black", [] ],
-    [ "esp:48", "esp:GND.5", "black", [] ]
+    [ "esp:45", "esp:GND.3", "black", [] ],
+    [ "esp:48", "esp:GND.4", "black", [] ]
   ],
   "dependencies": {}
 }
