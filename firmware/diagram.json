@@ -13,7 +13,7 @@
 
     { "type": "wokwi-pushbutton", "id": "btn-g0", "top": -180, "left": -190, "attrs": { "color": "white", "label": "G0" } },
 
-    { "type": "board-esp32-s3-devkit-c-1", "id": "esp", "top": -40, "left": 360, "attrs": { "flashSize": "8", "psramSize": "8" } }
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": -40, "left": 360, "attrs": { "flashSize": "8", "psramSize": "8", "fullBoot": "1" } }
   ],
   "connections": [
     [ "esp:TX",  "$serialMonitor:RX", "",       [] ],
