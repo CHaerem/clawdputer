@@ -66,6 +66,7 @@ jobs:
         # autodetect, missing IMU on I2C, etc). Once a run completes
         # cleanly on main we can drop continue-on-error so regressions
         # actually fail CI.
+        id: smoke
         continue-on-error: true
         uses: wokwi/wokwi-ci-action@v1
         with:
@@ -76,8 +77,10 @@ jobs:
           serial_log_file: wokwi-serial.log
           fail_text: "Guru Meditation"
 
-      - name: Upload serial log on failure
-        if: failure()
+      - name: Upload serial log
+        # Always upload — continue-on-error above masks smoke failures
+        # from the job, so a plain `if: failure()` would never fire.
+        if: always() && hashFiles('firmware/wokwi-serial.log') != ''
         uses: actions/upload-artifact@v4
         with:
           name: wokwi-serial-log
