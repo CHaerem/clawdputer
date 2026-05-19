@@ -351,12 +351,27 @@ everything relative to `wokwi.toml`, and boots the actual firmware.
 
 `diagram.json` wires the StampS3 to a 240×135 ST7789, a G0 push button,
 and the custom `chip-cardputer-keyboard` (sources under
-`firmware/wokwi-chips/cardputer-keyboard/`). The custom chip mirrors
-`IOMatrixKeyboardReader::update()` — three column-select inputs driven
-by GPIO 8/9/11, seven open-drain row outputs that the chip pulls low
-for any pressed cell matching the current column step. Pressed keys
-are configured via the chip's `keys` text-input attribute as
-`x,y;x,y;…` cells (coordinates match `_key_value_map[y][x]`).
+`firmware/wokwi-chips/cardputer-keyboard/`). The chip's `chip.c` is
+compiled to `chip.wasm` by `wokwi/builder-clang-wasm` (see the
+`Compile cardputer-keyboard custom chip` step in `wokwi.yml`,
+`wokwi-publish.yml`, and `wokwi-pr-publish.yml`); `wokwi.toml`'s
+`[[chip]] binary = "wokwi-chips/cardputer-keyboard/chip.wasm"` references
+the build output. Locally: `cd firmware/wokwi-chips/cardputer-keyboard
+&& make` (requires Docker). The .wasm is gitignored.
+
+Today the chip is a **boot-only stub** that declares the 10 keyboard
+pins and never pulls a row low — the firmware sees "no keys pressed,"
+which is enough for the smoke test (launcher renders) but means
+**interactive key injection in Wokwi isn't wired**. An earlier
+version tried a `keys` text-input attribute (`x,y;x,y;…`), but the
+public Wokwi Custom Chips API (`attr_init`/`attr_read` and their
+`_float` variants) supports only integer/float attributes and no
+attribute-change callbacks — string attrs and `attr_watch` don't
+exist. A real key-injection path would either pack the 56-cell
+pressed-mask into ≥2 `uint32` attributes (clunky UI, no labels) or
+wire individual `wokwi-pushbutton`s into the row pins via the
+diagram — the latter is the cleaner long-term option but hasn't been
+built yet.
 
 **Variant detection.** M5Unified probes GPIO 5/6/8/9 to pick between
 `board_M5Cardputer` and `board_M5CardputerADV`. With only the keyboard

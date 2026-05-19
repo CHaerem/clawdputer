@@ -79,6 +79,16 @@ jobs:
         working-directory: firmware
         run: pio run -e cardputer
 
+      - name: Compile cardputer-keyboard custom chip
+        if: github.event.action != 'closed'
+        working-directory: firmware/wokwi-chips/cardputer-keyboard
+        run: |
+          docker run --rm -v "$PWD":/work -w /work wokwi/builder-clang-wasm \
+            clang --target=wasm32-unknown-wasi --sysroot /opt/wasi-libc \
+              -nostartfiles -Wl,--export-table -Wl,--no-entry -Werror \
+              -o chip.wasm chip.c
+          test -s chip.wasm
+
       - name: Stage Wokwi bundle
         if: github.event.action != 'closed'
         run: |
@@ -88,7 +98,7 @@ jobs:
           cp firmware/.pio/build/cardputer/firmware.bin  /tmp/wokwi-bundle/firmware/firmware.bin
           cp firmware/.pio/build/cardputer/firmware.elf  /tmp/wokwi-bundle/firmware/firmware.elf
           cp firmware/diagram.json                       /tmp/wokwi-bundle/firmware/diagram.json
-          cp firmware/wokwi-chips/cardputer-keyboard/chip.c    /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.c
+          cp firmware/wokwi-chips/cardputer-keyboard/chip.wasm /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.wasm
           cp firmware/wokwi-chips/cardputer-keyboard/chip.json /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.json
           cat > /tmp/wokwi-bundle/firmware/wokwi.toml <<'TOML'
           [wokwi]
@@ -98,7 +108,7 @@ jobs:
 
           [[chip]]
           name   = "cardputer-keyboard"
-          binary = "wokwi-chips/cardputer-keyboard/chip.c"
+          binary = "wokwi-chips/cardputer-keyboard/chip.wasm"
           TOML
           cat > /tmp/wokwi-bundle/README.md <<MD
           # ${PR_BRANCH}

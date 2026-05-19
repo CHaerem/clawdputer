@@ -51,6 +51,15 @@ jobs:
         working-directory: firmware
         run: pio run -e cardputer
 
+      - name: Compile cardputer-keyboard custom chip
+        working-directory: firmware/wokwi-chips/cardputer-keyboard
+        run: |
+          docker run --rm -v "$PWD":/work -w /work wokwi/builder-clang-wasm \
+            clang --target=wasm32-unknown-wasi --sysroot /opt/wasi-libc \
+              -nostartfiles -Wl,--export-table -Wl,--no-entry -Werror \
+              -o chip.wasm chip.c
+          test -s chip.wasm
+
       - name: Run Wokwi boot smoke test
         # Advisory only — Wokwi's StampS3 + custom keyboard chip may
         # still diverge from real-hardware init in subtle ways (panel
