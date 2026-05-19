@@ -1,0 +1,18 @@
+{
+  "name": "Cardputer Keyboard",
+  "author": "clawdputer",
+  "pins": [
+    "VCC",
+    "GND",
+    "COL_A",
+    "COL_B",
+    "COL_C",
+    "ROW0",
+    "ROW1",
+    "ROW2",
+    "ROW3",
+    "ROW4",
+    "ROW5",
+    "ROW6"
+  ]
+}
