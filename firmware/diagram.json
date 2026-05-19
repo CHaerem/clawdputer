@@ -42,7 +42,10 @@
     [ "esp:7",     "kb:ROW6",  "purple",[] ],
 
     [ "btn-g0:1.l", "esp:0",   "green", [] ],
-    [ "btn-g0:2.l", "esp:GND.3","black",[] ]
+    [ "btn-g0:2.l", "esp:GND.3","black",[] ],
+
+    [ "esp:45", "esp:GND.4", "black", [] ],
+    [ "esp:48", "esp:GND.5", "black", [] ]
   ],
   "dependencies": {}
 }

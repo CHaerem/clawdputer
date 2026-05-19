@@ -174,6 +174,12 @@ void setup() {
     Serial0.println("[clawdputer] pre-init");
 
     auto cfg = M5.config();
+    // Without this, autodetect in Wokwi (where the ST7789 doesn't reply
+    // to panel-ID reads) lands on board_M5PowerHub via the I2C 0x50
+    // probe on GPIO 45/48, then watchdog-panics in PowerHub-specific
+    // init. On real Cardputer hardware autodetect always succeeds, so
+    // this fallback is never consulted.
+    cfg.fallback_board = m5::board_t::board_M5Cardputer;
     M5Cardputer.begin(cfg, true);
     M5Cardputer.Display.setRotation(1);
 
