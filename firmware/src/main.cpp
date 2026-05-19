@@ -180,6 +180,18 @@ void setup() {
     // init. On real Cardputer hardware autodetect always succeeds, so
     // this fallback is never consulted.
     cfg.fallback_board = m5::board_t::board_M5Cardputer;
+#ifdef CLAWD_WOKWI_BUILD
+    // Wokwi doesn't emulate the Cardputer's IMU, RTC, mic, or speaker
+    // — M5Unified's init for any of them stalls on I2C/I2S transfers
+    // that never ACK. Disable them so begin() can return and we reach
+    // the launcher. Real-hardware builds use the defaults (all on).
+    cfg.internal_imu = false;
+    cfg.internal_rtc = false;
+    cfg.internal_mic = false;
+    cfg.internal_spk = false;
+    cfg.clear_display = false;
+    cfg.output_power = false;
+#endif
     M5Cardputer.begin(cfg, true);
     M5Cardputer.Display.setRotation(1);
 

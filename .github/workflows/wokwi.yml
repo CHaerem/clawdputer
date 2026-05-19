@@ -49,10 +49,10 @@ jobs:
 
       - name: Build firmware
         working-directory: firmware
-        run: pio run -e cardputer
+        run: pio run -e cardputer-wokwi
 
       - name: Merge flash image for Wokwi
-        working-directory: firmware/.pio/build/cardputer
+        working-directory: firmware/.pio/build/cardputer-wokwi
         run: |
           pip install --quiet esptool
           python -m esptool --chip esp32s3 merge_bin \
