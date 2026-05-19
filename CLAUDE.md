@@ -351,12 +351,27 @@ everything relative to `wokwi.toml`, and boots the actual firmware.
 
 `diagram.json` wires the StampS3 to a 240×135 ST7789, a G0 push button,
 and the custom `chip-cardputer-keyboard` (sources under
-`firmware/wokwi-chips/cardputer-keyboard/`). The custom chip mirrors
-`IOMatrixKeyboardReader::update()` — three column-select inputs driven
-by GPIO 8/9/11, seven open-drain row outputs that the chip pulls low
-for any pressed cell matching the current column step. Pressed keys
-are configured via the chip's `keys` text-input attribute as
-`x,y;x,y;…` cells (coordinates match `_key_value_map[y][x]`).
+`firmware/wokwi-chips/cardputer-keyboard/`). The chip's `chip.c` is
+compiled to `chip.wasm` by `wokwi/builder-clang-wasm` (see the
+`Compile cardputer-keyboard custom chip` step in `wokwi.yml`,
+`wokwi-publish.yml`, and `wokwi-pr-publish.yml`); `wokwi.toml`'s
+`[[chip]] binary = "wokwi-chips/cardputer-keyboard/chip.wasm"` references
+the build output. Locally: `cd firmware/wokwi-chips/cardputer-keyboard
+&& make` (requires Docker). The .wasm is gitignored.
+
+Today the chip is a **boot-only stub** that declares the 10 keyboard
+pins and never pulls a row low — the firmware sees "no keys pressed,"
+which is enough for the smoke test (launcher renders) but means
+**interactive key injection in Wokwi isn't wired**. An earlier
+version tried a `keys` text-input attribute (`x,y;x,y;…`), but the
+public Wokwi Custom Chips API (`attr_init`/`attr_read` and their
+`_float` variants) supports only integer/float attributes and no
+attribute-change callbacks — string attrs and `attr_watch` don't
+exist. A real key-injection path would either pack the 56-cell
+pressed-mask into ≥2 `uint32` attributes (clunky UI, no labels) or
+wire individual `wokwi-pushbutton`s into the row pins via the
+diagram — the latter is the cleaner long-term option but hasn't been
+built yet.
 
 **Variant detection.** M5Unified probes GPIO 5/6/8/9 to pick between
 `board_M5Cardputer` and `board_M5CardputerADV`. With only the keyboard
@@ -379,11 +394,22 @@ boot:
   dead. Falling back to `wokwi-cli`'s `--custom-chip` flag locally is
   the fastest way to diagnose.
 
-**Per-PR firmware previews.** Not wired up yet. Today the badge always
-points at main's firmware via the `wokwi-firmware` branch. If
-firmware-changing PRs become common, extend `wokwi-publish.yml` to
-also force-push to `wokwi-firmware/pr-<N>` branches on PR events and
-override the badge URL in `pr-preview.yml`'s sticky comment.
+**Per-PR firmware previews.** `.github/workflows/wokwi-pr-publish.yml`
+builds firmware for any PR touching `firmware/**` and force-pushes it
+to a `wokwi-firmware-pr-<N>` orphan branch. A sticky comment on the
+PR links to
+`https://wokwi.com/github/<owner>/<repo>/tree/wokwi-firmware-pr-<N>`
+so reviewers can boot that PR's exact firmware in the browser. The
+branch is deleted on PR close/merge. The hosted badge in `web/index.html`
+still points at main's `wokwi-firmware` branch — PR previews are
+discovered via the PR comment, not the static demo.
+
+**Smoke test as regression net.** `.github/workflows/wokwi.yml` now
+runs on every push to main and on firmware-touching PRs (still
+`continue-on-error: true` until the Wokwi-vs-real-hardware delta is
+audited end-to-end). It boots the same firmware bundle that the
+public embed loads, so a Wokwi-side regression shows up in CI before
+users click through.
 
 ## Keeping docs in sync
 

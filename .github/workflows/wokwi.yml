@@ -1,12 +1,22 @@
 name: wokwi-smoke
 
+# Boots firmware.bin in Wokwi via the same diagram.json + custom keyboard
+# chip that ship to the public "Open in Wokwi" badge. Acts as a regression
+# net for the simulator — if a firmware change breaks boot in the embed,
+# this catches it before users click through. Still `continue-on-error`
+# because the Wokwi-vs-real-hardware delta hasn't been audited end-to-end
+# yet; flip that off once the run is reliably green.
+
 on:
-  # Manual-only for now. Wokwi's generic ESP32-S3 devkit can't emulate the
-  # Cardputer's display + keyboard pinout, so M5Cardputer.begin() hangs
-  # before we ever get serial output. Until that's solved (custom diagram
-  # with ST7789 + matrix wired up), running the job on every push just
-  # burns minutes for a guaranteed timeout. Trigger from the Actions tab
-  # when there's a reason.
+  push:
+    branches: [main]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/wokwi.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/wokwi.yml"
   workflow_dispatch:
 
 permissions:
@@ -39,15 +49,37 @@ jobs:
 
       - name: Build firmware
         working-directory: firmware
-        run: pio run -e cardputer
+        run: pio run -e cardputer-wokwi
+
+      - name: Merge flash image for Wokwi
+        working-directory: firmware/.pio/build/cardputer-wokwi
+        run: |
+          pip install --quiet esptool
+          python -m esptool --chip esp32s3 merge_bin \
+            -o wokwi.bin \
+            --flash_mode dio --flash_size 8MB --flash_freq 80m \
+            0x0     bootloader.bin \
+            0x8000  partitions.bin \
+            0xe000  ota_data_initial.bin \
+            0x10000 firmware.bin
+          ls -la wokwi.bin
+
+      - name: Compile cardputer-keyboard custom chip
+        working-directory: firmware/wokwi-chips/cardputer-keyboard
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/work -w /work wokwi/builder-clang-wasm \
+            clang --target=wasm32-unknown-wasi --sysroot /opt/wasi-libc \
+              -nostartfiles -Wl,--export-table -Wl,--no-entry -Werror \
+              -o chip.wasm chip.c
+          test -s chip.wasm
 
       - name: Run Wokwi boot smoke test
-        # Advisory only for now: Wokwi's generic ESP32-S3 devkit doesn't
-        # mirror the Cardputer's display / keyboard / IMU pins, so
-        # M5Cardputer.begin() typically hangs before Serial output. We
-        # keep the job in place to catch panics-during-init that would
-        # be visible (and to make a real device emulation easy to add
-        # later by replacing diagram.json).
+        # Advisory only — Wokwi's StampS3 + custom keyboard chip may
+        # still diverge from real-hardware init in subtle ways (panel
+        # autodetect, missing IMU on I2C, etc). Once a run completes
+        # cleanly on main we can drop continue-on-error so regressions
+        # actually fail CI.
+        id: smoke
         continue-on-error: true
         uses: wokwi/wokwi-ci-action@v1
         with:
@@ -58,9 +90,20 @@ jobs:
           serial_log_file: wokwi-serial.log
           fail_text: "Guru Meditation"
 
-      - name: Upload serial log on failure
-        if: failure()
+      - name: Locate serial log
+        if: always()
+        run: |
+          echo "---candidate paths---"
+          find . -maxdepth 4 -name "wokwi-serial.log" -print 2>/dev/null || true
+
+      - name: Upload serial log
+        # Always upload — continue-on-error above masks smoke failures
+        # from the job, so a plain `if: failure()` would never fire.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: wokwi-serial-log
-          path: firmware/wokwi-serial.log
+          path: |
+            wokwi-serial.log
+            firmware/wokwi-serial.log
+          if-no-files-found: ignore

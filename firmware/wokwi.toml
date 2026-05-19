@@ -20,9 +20,15 @@
 
 [wokwi]
 version = 1
-firmware = '.pio/build/cardputer/firmware.bin'
-elf      = '.pio/build/cardputer/firmware.elf'
+# Merged flash image — bootloader + partition table + ota_data + app.
+# Built by the `merge_bin` step in the Wokwi workflows (and reproducible
+# locally with `make wokwi-bin` if you add the target). Wokwi's ESP32-S3
+# emulator needs the full flash layout, not just the app binary, or the
+# ROM bootloader can't find the second-stage bootloader and nothing
+# runs (we hit this — zero serial output for ~10 commits).
+firmware = '.pio/build/cardputer-wokwi/wokwi.bin'
+elf      = '.pio/build/cardputer-wokwi/firmware.elf'
 
 [[chip]]
 name   = "cardputer-keyboard"
-binary = "wokwi-chips/cardputer-keyboard/chip.c"
+binary = "wokwi-chips/cardputer-keyboard/chip.wasm"

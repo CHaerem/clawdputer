@@ -1,0 +1,164 @@
+name: wokwi-pr-publish
+
+# Per-PR Wokwi firmware previews.
+#
+# For every PR that touches firmware (or the Wokwi assets themselves)
+# we build firmware.bin and force-push the Wokwi bundle to an orphan
+# branch named `wokwi-firmware-pr-<N>`. A sticky comment on the PR
+# links to https://wokwi.com/github/<owner>/<repo>/tree/wokwi-firmware-pr-<N>
+# so reviewers can boot the exact PR build in the browser.
+#
+# On PR close/merge the branch is deleted to keep refs tidy.
+#
+# Companion to `wokwi-publish.yml`, which does the same thing for main
+# under the fixed `wokwi-firmware` branch.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    paths:
+      - "firmware/**"
+      - ".github/workflows/wokwi-pr-publish.yml"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: wokwi-pr-publish-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      PR_BRANCH: wokwi-firmware-pr-${{ github.event.pull_request.number }}
+    steps:
+      - name: Delete preview branch on PR close
+        if: github.event.action == 'closed'
+        run: |
+          set -euo pipefail
+          git ls-remote --exit-code --heads \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$PR_BRANCH" >/dev/null 2>&1 && \
+            git push \
+              "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              --delete "$PR_BRANCH" || \
+            echo "no preview branch to delete"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v4
+        if: github.event.action != 'closed'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-python@v5
+        if: github.event.action != 'closed'
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        if: github.event.action != 'closed'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            firmware/.pio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        if: github.event.action != 'closed'
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        if: github.event.action != 'closed'
+        working-directory: firmware
+        run: pio run -e cardputer-wokwi
+
+      - name: Merge flash image for Wokwi
+        if: github.event.action != 'closed'
+        working-directory: firmware/.pio/build/cardputer-wokwi
+        run: |
+          pip install --quiet esptool
+          python -m esptool --chip esp32s3 merge_bin \
+            -o wokwi.bin \
+            --flash_mode dio --flash_size 8MB --flash_freq 80m \
+            0x0     bootloader.bin \
+            0x8000  partitions.bin \
+            0xe000  ota_data_initial.bin \
+            0x10000 firmware.bin
+
+      - name: Compile cardputer-keyboard custom chip
+        if: github.event.action != 'closed'
+        working-directory: firmware/wokwi-chips/cardputer-keyboard
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/work -w /work wokwi/builder-clang-wasm \
+            clang --target=wasm32-unknown-wasi --sysroot /opt/wasi-libc \
+              -nostartfiles -Wl,--export-table -Wl,--no-entry -Werror \
+              -o chip.wasm chip.c
+          test -s chip.wasm
+
+      - name: Stage Wokwi bundle
+        if: github.event.action != 'closed'
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/wokwi-bundle
+          mkdir -p /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard
+          cp firmware/.pio/build/cardputer-wokwi/wokwi.bin     /tmp/wokwi-bundle/firmware/wokwi.bin
+          cp firmware/.pio/build/cardputer-wokwi/firmware.elf  /tmp/wokwi-bundle/firmware/firmware.elf
+          cp firmware/diagram.json                       /tmp/wokwi-bundle/firmware/diagram.json
+          cp firmware/wokwi-chips/cardputer-keyboard/chip.wasm /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.wasm
+          cp firmware/wokwi-chips/cardputer-keyboard/chip.json /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.json
+          cat > /tmp/wokwi-bundle/firmware/wokwi.toml <<'TOML'
+          [wokwi]
+          version = 1
+          firmware = 'wokwi.bin'
+          elf      = 'firmware.elf'
+
+          [[chip]]
+          name   = "cardputer-keyboard"
+          binary = "wokwi-chips/cardputer-keyboard/chip.wasm"
+          TOML
+          cat > /tmp/wokwi-bundle/README.md <<MD
+          # ${PR_BRANCH}
+
+          Auto-generated orphan branch for PR #${{ github.event.pull_request.number }}.
+          Force-pushed by \`.github/workflows/wokwi-pr-publish.yml\` on every
+          push to the PR. Deleted on PR close/merge. Contains
+          \`firmware/firmware.bin\` + Wokwi config so the
+          \`wokwi.com/github/${GITHUB_REPOSITORY}/tree/${PR_BRANCH}\` embed
+          loads this PR's firmware. Do not edit by hand.
+          MD
+
+      - name: Force-push PR preview branch
+        if: github.event.action != 'closed'
+        run: |
+          set -euo pipefail
+          cd /tmp/wokwi-bundle
+          git init -q
+          git checkout --orphan "$PR_BRANCH"
+          git config user.name  "clawdputer-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git commit -q -m "wokwi-firmware: PR #${{ github.event.pull_request.number }} @ ${GITHUB_SHA::7}"
+          git push --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$PR_BRANCH"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sticky Wokwi link comment
+        if: github.event.action != 'closed'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: wokwi-firmware-preview
+          message: |
+            🔌 **Wokwi firmware preview** — boot this PR's firmware in the browser:
+
+            👉 https://wokwi.com/github/${{ github.repository }}/tree/${{ env.PR_BRANCH }}
+
+            <sub>Rebuilt on every push to this PR. The `wokwi-firmware-pr-${{ github.event.pull_request.number }}` orphan branch is deleted automatically on close/merge. See `.github/workflows/wokwi-pr-publish.yml`.</sub>

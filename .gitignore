@@ -14,6 +14,8 @@ firmware/src/CMakeLists.txt
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 wokwi-serial.log
+# Compiled Wokwi custom chip — rebuilt from chip.c by CI / `make` locally
+firmware/wokwi-chips/*/chip.wasm
 
 # Per-device secrets (WiFi credentials, OTA password)
 firmware/src/wifi_secrets.h

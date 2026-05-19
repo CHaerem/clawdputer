@@ -60,6 +60,7 @@ void enter(const App* app) {
     health::noteAppEntered(app->id);
     if (g_active->onEnter) g_active->onEnter();
     Serial.printf("[clawdputer] entered app: %s\n", g_active->id);
+    Serial0.printf("[clawdputer] entered app: %s\n", g_active->id);
 }
 
 const App* findApp(const char* id) {
@@ -164,7 +165,33 @@ extern "C" const char* clawd_last_key_summary() {
 }
 
 void setup() {
+    // UART0 ping as the very first action — used by the Wokwi smoke
+    // test to disambiguate "Wokwi can see UART0" from "M5Cardputer.begin
+    // hung." On real hardware UART0 is unused outside the dock header,
+    // so the extra bytes are harmless.
+    Serial0.begin(115200);
+    Serial0.println();
+    Serial0.println("[clawdputer] pre-init");
+
     auto cfg = M5.config();
+    // Without this, autodetect in Wokwi (where the ST7789 doesn't reply
+    // to panel-ID reads) lands on board_M5PowerHub via the I2C 0x50
+    // probe on GPIO 45/48, then watchdog-panics in PowerHub-specific
+    // init. On real Cardputer hardware autodetect always succeeds, so
+    // this fallback is never consulted.
+    cfg.fallback_board = m5::board_t::board_M5Cardputer;
+#ifdef CLAWD_WOKWI_BUILD
+    // Wokwi doesn't emulate the Cardputer's IMU, RTC, mic, or speaker
+    // — M5Unified's init for any of them stalls on I2C/I2S transfers
+    // that never ACK. Disable them so begin() can return and we reach
+    // the launcher. Real-hardware builds use the defaults (all on).
+    cfg.internal_imu = false;
+    cfg.internal_rtc = false;
+    cfg.internal_mic = false;
+    cfg.internal_spk = false;
+    cfg.clear_display = false;
+    cfg.output_power = false;
+#endif
     M5Cardputer.begin(cfg, true);
     M5Cardputer.Display.setRotation(1);
 
@@ -173,6 +200,8 @@ void setup() {
     Serial.println();
     Serial.println("[clawdputer] boot");
     Serial.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
+    Serial0.println("[clawdputer] boot");
+    Serial0.printf("[clawdputer] %u app(s) registered\n", (unsigned)registry::count());
 
     // Touching ui::display() triggers the canvas allocation so we know up
     // front whether the backbuffer is available. Allocated first because

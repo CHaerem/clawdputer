@@ -49,29 +49,50 @@ jobs:
 
       - name: Build firmware
         working-directory: firmware
-        run: pio run -e cardputer
+        run: pio run -e cardputer-wokwi
+
+      - name: Merge flash image for Wokwi
+        working-directory: firmware/.pio/build/cardputer-wokwi
+        run: |
+          pip install --quiet esptool
+          python -m esptool --chip esp32s3 merge_bin \
+            -o wokwi.bin \
+            --flash_mode dio --flash_size 8MB --flash_freq 80m \
+            0x0     bootloader.bin \
+            0x8000  partitions.bin \
+            0xe000  ota_data_initial.bin \
+            0x10000 firmware.bin
+
+      - name: Compile cardputer-keyboard custom chip
+        working-directory: firmware/wokwi-chips/cardputer-keyboard
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/work -w /work wokwi/builder-clang-wasm \
+            clang --target=wasm32-unknown-wasi --sysroot /opt/wasi-libc \
+              -nostartfiles -Wl,--export-table -Wl,--no-entry -Werror \
+              -o chip.wasm chip.c
+          test -s chip.wasm
 
       - name: Stage Wokwi bundle
         run: |
           set -euo pipefail
           rm -rf /tmp/wokwi-bundle
           mkdir -p /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard
-          cp firmware/.pio/build/cardputer/firmware.bin  /tmp/wokwi-bundle/firmware/firmware.bin
-          cp firmware/.pio/build/cardputer/firmware.elf  /tmp/wokwi-bundle/firmware/firmware.elf
+          cp firmware/.pio/build/cardputer-wokwi/wokwi.bin     /tmp/wokwi-bundle/firmware/wokwi.bin
+          cp firmware/.pio/build/cardputer-wokwi/firmware.elf  /tmp/wokwi-bundle/firmware/firmware.elf
           cp firmware/diagram.json                       /tmp/wokwi-bundle/firmware/diagram.json
-          cp firmware/wokwi-chips/cardputer-keyboard/chip.c    /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.c
+          cp firmware/wokwi-chips/cardputer-keyboard/chip.wasm /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.wasm
           cp firmware/wokwi-chips/cardputer-keyboard/chip.json /tmp/wokwi-bundle/firmware/wokwi-chips/cardputer-keyboard/chip.json
           # Inline wokwi.toml that points at the committed binary, not
           # the .pio path (which doesn't exist in this branch).
           cat > /tmp/wokwi-bundle/firmware/wokwi.toml <<'TOML'
           [wokwi]
           version = 1
-          firmware = 'firmware.bin'
+          firmware = 'wokwi.bin'
           elf      = 'firmware.elf'
 
           [[chip]]
           name   = "cardputer-keyboard"
-          binary = "wokwi-chips/cardputer-keyboard/chip.c"
+          binary = "wokwi-chips/cardputer-keyboard/chip.wasm"
           TOML
           # Minimal README so the orphan branch is self-explanatory.
           cat > /tmp/wokwi-bundle/README.md <<'MD'
